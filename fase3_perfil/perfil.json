@@ -1,0 +1,56 @@
+{
+  "nome": "Cleison Mendes",
+  "cargo_atual": "Analista de Chargeback Antifraude",
+  "empresa_atual": "Callink (parceiro PicPay)",
+  "experiencia_anos": 9,
+
+  "habilidades": [
+    "chargeback",
+    "antifraude",
+    "análise de fraude",
+    "prevenção de fraudes",
+    "backoffice financeiro",
+    "python",
+    "sql",
+    "automação de processos",
+    "análise de dados",
+    "disputas",
+    "contestação de transações",
+    "genai",
+    "prompt engineering"
+  ],
+
+  "certificacoes": [
+    "Bootcamp GenAI & Dados — Bradesco / DIO",
+    "Bootcamp Automação"
+  ],
+
+  "formacao": {
+    "curso": "Análise e Desenvolvimento de Sistemas",
+    "instituicao": "Estácio",
+    "conclusao_prevista": 2028,
+    "status": "em andamento"
+  },
+
+  "idiomas": [
+    "Português (nativo)"
+  ],
+
+  "preferencias_vaga": {
+    "modalidade": ["remoto", "híbrido", "presencial", "home office"],
+    "areas": [
+      "antifraude",
+      "chargeback",
+      "análise de dados",
+      "automação",
+      "qa",
+      "backoffice financeiro",
+      "melhoria de processos",
+      "melhoria continua"
+    ],
+    "nivel": ["júnior", "pleno"],
+    "salario_minimo": 3200
+  },
+
+  "linkedin": "https://linkedin.com/in/cleison-mendes"
+}
