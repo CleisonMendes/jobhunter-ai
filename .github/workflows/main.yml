@@ -1,0 +1,32 @@
+name: JobHunter AI Automacao
+
+on:
+  schedule:
+    # Corre todos os dias às 11:30 UTC. 
+    # Com o fuso horário de São Paulo (UTC-3), o robô enviará a mensagem exatamente às 08:30 da manhã.
+    - cron: '30 11 * * *'
+  workflow_dispatch: # Adiciona um botão para poder executar manualmente quando quiser
+
+jobs:
+  procurar-vagas:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Aceder ao código
+        uses: actions/checkout@v3
+
+      - name: Preparar o Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Instalar dependências
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests beautifulsoup4 lxml
+
+      - name: Executar o JobHunter AI
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python main.py
