@@ -172,7 +172,7 @@ def main():
     print("\n[FASE 3] Carregando perfil do candidato...")
     perfil = carregar_perfil()
     exibir_perfil(perfil)
-    #input("\n  Pressione ENTER para iniciar a busca...")
+
 
     # ── FASE 1: Busca ─────────────────────────────────────────────
     print("\n[FASE 1] Iniciando busca de vagas...")
