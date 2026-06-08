@@ -25,6 +25,7 @@ sys.path.append(str(Path(__file__).parent / "fase3_perfil"))
 from buscador import buscar_vagas_gupy, buscar_todas_greenhouse, buscar_vagas_indeed, buscar_linkedin_rss
 from filtro   import filtrar_vagas, exibir_resultado_filtro
 from perfil   import carregar_perfil, exibir_perfil
+from buscador import buscar_vagas_gupy, buscar_todas_greenhouse, buscar_vagas_indeed, buscar_linkedin_rss, buscar_linkedin_posts
 
 
 # ====================================================================
