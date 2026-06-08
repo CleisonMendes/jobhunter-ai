@@ -4,7 +4,7 @@ on:
   schedule:
     # Corre todos os dias às 11:30 UTC. 
     # Com o fuso horário de São Paulo (UTC-3), o robô enviará a mensagem exatamente às 08:30 da manhã.
-    - cron: '30 11 * * *'
+    - cron: '0 */2 * * *'
   workflow_dispatch: # Adiciona um botão para poder executar manualmente quando quiser
 
 jobs:
