@@ -10,7 +10,7 @@ jobs:
   procurar-vagas:
     runs-on: ubuntu-latest
     
-    # ⚠️ PERMISSÃO NECESSÁRIA PARA O ROBÔ SALVAR O BANCO DE DADOS ⚠️
+    # ⚠️ PERMISSÃO NECESSÁRIA PARA O ROBÔ SALVAR O BANCO DE DADOS E O PERFIL ⚠️
     permissions:
       contents: write
 
@@ -26,20 +26,23 @@ jobs:
       - name: Instalar dependências
         run: |
           python -m pip install --upgrade pip
-          pip install requests beautifulsoup4 lxml
+          pip install requests beautifulsoup4 lxml pypdf google-generativeai
 
       - name: Executar o JobHunter AI
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python main.py
 
-      - name: Salvar e persistir Banco de Dados de vagas
+      - name: Salvar e persistir Banco de Dados e Perfil
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          # Adiciona o banco de dados modificado ao histórico do Git
+          # Adiciona o banco de dados modificado
           git add vagas_enviadas.db || true
-          # Salva a alteração apenas se houver novos registros
-          git commit -m "🤖 DB: Atualizando histórico de vagas enviadas [skip ci]" || true
+          # Adiciona o perfil atualizado pela Inteligência Artificial
+          git add fase3_perfil/perfil.json || true
+          # Salva a alteração com uma tag especial para o GitHub Actions ignorar e não entrar em loop
+          git commit -m "🤖 Auto-update: DB de vagas e/ou Perfil JSON [skip ci]" || true
           git push || true
