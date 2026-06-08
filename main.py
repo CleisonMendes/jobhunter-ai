@@ -1,13 +1,14 @@
 """
 ==============================================
   JOBHUNTER AI — main.py
-  Integração Completa: Fases 1 a 5 (Telegram)
+  Integração Completa: Fases 1 a 6 (Telegram + DB)
 ==============================================
 Fontes ativas:
   ✅ Gupy       — API pública
   ✅ Greenhouse — XP, Stone, Nubank, Creditas...
   ✅ Indeed     — scraping Brasil
   ✅ LinkedIn   — feed RSS Brasil
+  ✅ LinkedIn   — Posts (Mercado Oculto)
 
 Execute com:
     py main.py
@@ -22,7 +23,6 @@ sys.path.append(str(Path(__file__).parent / "fase1_mvp"))
 sys.path.append(str(Path(__file__).parent / "fase2_filtro"))
 sys.path.append(str(Path(__file__).parent / "fase3_perfil"))
 
-from buscador import buscar_vagas_gupy, buscar_todas_greenhouse, buscar_vagas_indeed, buscar_linkedin_rss
 from filtro   import filtrar_vagas, exibir_resultado_filtro
 from perfil   import carregar_perfil, exibir_perfil
 from buscador import buscar_vagas_gupy, buscar_todas_greenhouse, buscar_vagas_indeed, buscar_linkedin_rss, buscar_linkedin_posts
@@ -250,7 +250,7 @@ def main():
         todas_vagas.extend(vagas)
         time.sleep(1)
 
-    # — LinkedIn —
+    # — LinkedIn (Busca normal via RSS) —
     print("\n💼 Buscando no LinkedIn via RSS público...")
     termos_linkedin = [
         "analista antifraude",
@@ -262,6 +262,18 @@ def main():
         vagas = buscar_linkedin_rss(termo)
         todas_vagas.extend(vagas)
         time.sleep(1)
+        
+    # — LinkedIn Posts (Mercado Oculto via DuckDuckGo) —
+    print("\n🔍 Acessando o mercado oculto de posts no LinkedIn...")
+    termos_ocultos = [
+        "antifraude",
+        "chargeback"
+    ]
+    
+    for termo in termos_ocultos:
+        vagas = buscar_linkedin_posts(termo)
+        todas_vagas.extend(vagas)
+        time.sleep(2) # Pausa maior para evitar que o buscador bloqueie o robô
 
     print(f"\n  📥 Total bruto coletado: {len(todas_vagas)} vaga(s)")
 
@@ -274,19 +286,17 @@ def main():
     vagas_com_score = calcular_match(vagas_filtradas, perfil)
     exibir_ranking(vagas_com_score, limite=15)
 
-    # ── FASE 5: Telegram ──────────────────────────────────────────
+    # ── FASE 5: Telegram (com persistência SQLite) ────────────────
     enviar_para_telegram(vagas_com_score, limite=15)
 
     # ── Resumo ────────────────────────────────────────────────────
     print(f"\n{'='*60}")
-    print(f"  ✅ Pipeline completo! Fases 1 a 5 integradas.")
+    print(f"  ✅ Pipeline completo! Fases 1 a 6 integradas.")
     print(f"  → {len(todas_vagas)} vagas brutas coletadas")
     print(f"  → {len(vagas_filtradas)} vagas relevantes após filtro")
-    print(f"  → Top 15 vagas enviadas para o Telegram")
+    print(f"  → Vagas inéditas filtradas pelo Banco de Dados")
     print(f"{'='*60}\n")
 
 
 if __name__ == "__main__":
     main()
-    
-    
