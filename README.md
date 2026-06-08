@@ -53,10 +53,10 @@ python fase3_perfil/perfil.py     # só o perfil
 | 1    | ✅ | MVP Buscador |
 | 2    | ✅ | Filtro Inteligente |
 | 3    | ✅ | Perfil do Usuário |
-| 4    | 🔜 | Match Score |
-| 5    | 🔜 | Relatório |
-| 6    | 🔜 | Banco de Dados SQLite |
-| 7    | 🔜 | Bot Telegram |
-| 8    | 🔜 | Currículo Inteligente |
-| 9    | 🔜 | Análise com IA |
+| 4    | ✅ | Match Score |
+| 5    | ✅ | Relatório |
+| 6    | ✅ | Banco de Dados SQLite |
+| 7    | ✅ | Bot Telegram |
+| 8    | ✅ | Currículo Inteligente |
+| 9    | ✅ | Análise com IA |
 | 10   | 🔜 | Dashboard Streamlit |
