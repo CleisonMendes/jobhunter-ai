@@ -2,14 +2,17 @@ name: JobHunter AI Automacao
 
 on:
   schedule:
-    # Corre todos os dias às 11:30 UTC. 
-    # Com o fuso horário de São Paulo (UTC-3), o robô enviará a mensagem exatamente às 08:30 da manhã.
+    # Executa automaticamente no minuto 0 a cada 2 horas
     - cron: '0 */2 * * *'
   workflow_dispatch: # Adiciona um botão para poder executar manualmente quando quiser
 
 jobs:
   procurar-vagas:
     runs-on: ubuntu-latest
+    
+    # ⚠️ PERMISSÃO NECESSÁRIA PARA O ROBÔ SALVAR O BANCO DE DADOS ⚠️
+    permissions:
+      contents: write
 
     steps:
       - name: Aceder ao código
@@ -30,3 +33,13 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python main.py
+
+      - name: Salvar e persistir Banco de Dados de vagas
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          # Adiciona o banco de dados modificado ao histórico do Git
+          git add vagas_enviadas.db || true
+          # Salva a alteração apenas se houver novos registros
+          git commit -m "🤖 DB: Atualizando histórico de vagas enviadas [skip ci]" || true
+          git push || true
