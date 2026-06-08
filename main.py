@@ -108,32 +108,63 @@ def exibir_ranking(vagas_pontuadas: list[dict], limite: int = 15) -> None:
         print(f"     Link        : {vaga['link']}")
         print(f"     {'-'*52}")
 
-
 # ====================================================================
-# ── FASE 5: ENVIO PARA O TELEGRAM ───────────────────────────────────
+# ── FASE 5: ENVIO PARA O TELEGRAM COM BANCO DE DADOS (MEMÓRIA) ──────
 # ====================================================================
 
 def enviar_para_telegram(vagas_pontuadas: list[dict], limite: int = 15) -> None:
-    """Envia o Top X de vagas formatado diretamente para o Telegram."""
+    """Filtra vagas repetidas usando SQLite e envia apenas as inéditas para o Telegram."""
     import requests
+    import os
+    import sqlite3
+
+    print("\n[FASE 5] Verificando vagas inéditas no Banco de Dados...")
+
+    # Conecta ao banco de dados (será criado na raiz do projeto se não existir)
+    conn = sqlite3.connect("vagas_enviadas.db")
+    cursor = conn.cursor()
+
+    # Cria a tabela para guardar os links se ela não existir
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS enviadas (
+            link TEXT PRIMARY KEY,
+            data_envio TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
+
+    # Pegar as credenciais do ambiente
+    TOKEN = os.environ.get("TELEGRAM_TOKEN")
+    CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+
+    # Filtra apenas vagas com score positivo
+    melhores_vagas = [v for v in vagas_pontuadas if v['match_score'] > 0]
     
-    print("\n[FASE 5] Enviando Top Vagas para o Telegram...")
-    
-    # ⚠️ ATENÇÃO: COLOQUE SUAS CREDENCIAIS AQUI ⚠️
-    TOKEN = "8871572338:AAG1OdUVBXbqZaqCdLdoX751LccHwqxbUu0"
-    CHAT_ID = "987847483"
-    
-    melhores_vagas = [v for v in vagas_pontuadas if v['match_score'] > 0][:limite]
-    
-    if not melhores_vagas:
-        print("  ❌ Nenhuma vaga com pontuação suficiente para enviar.")
+    vagas_ineditas = []
+
+    # Testa vaga por vaga no banco de dados
+    for vaga in melhores_vagas:
+        link = vaga['link']
+        cursor.execute("SELECT 1 FROM enviadas WHERE link = ?", (link,))
+        if cursor.fetchone() is None:
+            # Vaga não existe no banco, então é inédita!
+            vagas_ineditas.append(vaga)
+            
+            # Se já atingimos o limite de envio para essa rodada, paramos de acumular
+            if len(vagas_ineditas) >= limite:
+                break
+
+    if not vagas_ineditas:
+        print("  🤫 Nenhuma vaga nova nesta rodada. Nada foi enviado para evitar spam.")
+        conn.close()
         return
 
-    # Montando a mensagem com formatação HTML
-    mensagem = "🚀 <b>TOP VAGAS - JOBHUNTER AI</b> 🚀\n\n"
+    print(f"  🔥 Encontrada(s) {len(vagas_ineditas)} vaga(s) inédita(s)! Enviando...")
+
+    # Montando a mensagem com as INÉDITAS
+    mensagem = f"🚀 <b>NOVAS VAGAS INÉDITAS ({len(vagas_ineditas)})</b> 🚀\n\n"
     
-    for numero, vaga in enumerate(melhores_vagas, start=1):
-        # Limpando caracteres que podem quebrar o HTML do Telegram
+    for numero, vaga in enumerate(vagas_ineditas, start=1):
         titulo = vaga['titulo'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
         empresa = vaga['empresa'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
         
@@ -141,23 +172,31 @@ def enviar_para_telegram(vagas_pontuadas: list[dict], limite: int = 15) -> None:
         mensagem += f"⭐ Score: {vaga['match_score']} pts\n"
         mensagem += f"🏢 {empresa} | 📍 {vaga['local']}\n"
         mensagem += f"🔗 <a href='{vaga['link']}'>Acessar Vaga</a>\n\n"
+        
+        # Salva o link no banco de dados para não repetir na próxima rodada
+        cursor.execute("INSERT OR IGNORE INTO enviadas (link) VALUES (?)", (link,))
 
+    conn.commit()
+    conn.close()
+
+    # Envia para a API do Telegram
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     payload = {
         "chat_id": CHAT_ID,
         "text": mensagem,
         "parse_mode": "HTML",
-        "disable_web_page_preview": True # Evita que a mensagem fique gigante com as imagens dos links
+        "disable_web_page_preview": True
     }
 
     try:
         resposta = requests.post(url, json=payload)
         if resposta.status_code == 200:
-            print("  📱 ✅ Relatório enviado com sucesso para o seu celular!")
+            print("  📱 ✅ Novidades enviadas com sucesso para o seu celular!")
         else:
-            print(f"  ❌ Erro ao enviar: {resposta.text}")
+            print(f"  ❌ Erro ao enviar para o Telegram: {resposta.text}")
     except Exception as e:
         print(f"  ❌ Erro de conexão com Telegram: {e}")
+
 
 # ====================================================================
 
