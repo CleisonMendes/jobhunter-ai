@@ -383,3 +383,60 @@ if __name__ == "__main__":
 
     exibir_vagas(todas)
     print(f"\n📊 Total: {len(todas)} vaga(s)")
+
+def buscar_linkedin_posts(termo: str) -> list[dict]:
+    """
+    Busca postagens recentes (mercado oculto) no LinkedIn usando o DuckDuckGo 
+    para contornar bloqueios de IP de servidores Cloud.
+    """
+    import requests
+    from bs4 import BeautifulSoup
+
+    print(f"  🕵️‍♂️ Caçando posts ocultos no LinkedIn para: {termo}")
+    vagas_encontradas = []
+
+    # Dork: Pesquisa estritamente por posts no LinkedIn que contenham a palavra "vaga" e o termo desejado
+    query = f'site:linkedin.com/posts "vaga" "{termo}"'
+    url = "https://html.duckduckgo.com/html/"
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    
+    # O DuckDuckGo HTML aceita buscas via método POST
+    payload = {"q": query}
+
+    try:
+        resposta = requests.post(url, headers=headers, data=payload, timeout=15)
+        if resposta.status_code == 200:
+            soup = BeautifulSoup(resposta.text, 'lxml')
+            
+            # Pega todos os blocos de resultados
+            resultados = soup.find_all('div', class_='result')
+            
+            for res in resultados:
+                elemento_titulo = res.find('h2', class_='result__title')
+                elemento_link = res.find('a', class_='result__url')
+                
+                if elemento_titulo and elemento_link:
+                    titulo_bruto = elemento_titulo.text.strip()
+                    link = elemento_link.get('href', '')
+                    
+                    # Limpa a URL que o DDG as vezes encapsula
+                    if '//duckduckgo.com/l/?' in link:
+                        import urllib.parse
+                        parsed = urllib.parse.urlparse(link)
+                        link = urllib.parse.parse_qs(parsed.query).get('uddg', [link])[0]
+                    
+                    if 'linkedin.com/posts' in link:
+                        vagas_encontradas.append({
+                            'titulo': f"[POST] {titulo_bruto[:60]}...", # Indica que é um post e limita o tamanho
+                            'empresa': 'Postagem do LinkedIn',
+                            'local': 'Brasil (Verificar post)',
+                            'link': link,
+                            'fonte': 'LinkedIn Posts'
+                        })
+    except Exception as e:
+        print(f"  ❌ Erro ao buscar posts no DuckDuckGo: {e}")
+
+    return vagas_encontradas
