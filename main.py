@@ -1,7 +1,7 @@
 """
 ==============================================
   JOBHUNTER AI — main.py
-  Integração Completa: Fases 1 a 6 (Telegram + DB)
+  Integração Completa: Fases 1 a 7 (PDF + IA)
 ==============================================
 Fontes ativas:
   ✅ Gupy       — API pública
@@ -9,9 +9,7 @@ Fontes ativas:
   ✅ Indeed     — scraping Brasil
   ✅ LinkedIn   — feed RSS Brasil
   ✅ LinkedIn   — Posts (Mercado Oculto)
-
-Execute com:
-    py main.py
+  ✅ Gemini IA  — Leitura automática de PDF
 """
 
 import sys
@@ -23,17 +21,19 @@ sys.path.append(str(Path(__file__).parent / "fase1_mvp"))
 sys.path.append(str(Path(__file__).parent / "fase2_filtro"))
 sys.path.append(str(Path(__file__).parent / "fase3_perfil"))
 
-from filtro   import filtrar_vagas, exibir_resultado_filtro
-from perfil   import carregar_perfil, exibir_perfil
-from buscador import buscar_vagas_gupy, buscar_todas_greenhouse, buscar_vagas_indeed, buscar_linkedin_rss, buscar_linkedin_posts
+from filtro     import filtrar_vagas, exibir_resultado_filtro
+from perfil     import carregar_perfil, exibir_perfil
+from buscador   import buscar_vagas_gupy, buscar_todas_greenhouse, buscar_vagas_indeed, buscar_linkedin_rss, buscar_linkedin_posts
+
+# 💥 IMPORTAÇÃO NOVA: O Cérebro Leitor de PDF
+from leitor_pdf import checar_e_atualizar_perfil
 
 
 # ====================================================================
-# ── CÓDIGO DA FASE 4 INTEGRADO AQUI (MATCH SCORE) ───────────────────
+# ── FASE 4: MATCH SCORE ─────────────────────────────────────────────
 # ====================================================================
 
 def extrair_palavras_chave(perfil: dict) -> list:
-    """Extrai todas as palavras úteis do perfil.json para usar no match"""
     palavras = []
     for chave, valor in perfil.items():
         if isinstance(valor, list):
@@ -42,13 +42,11 @@ def extrair_palavras_chave(perfil: dict) -> list:
         elif isinstance(valor, str):
             palavras.extend(valor.lower().split())
             
-    # Termos de peso da sua área
     termos_essenciais = ["antifraude", "chargeback", "fraude", "backoffice", "python", "sql", "dados", "ia"]
     palavras.extend(termos_essenciais)
     return list(set(palavras))
 
 def calcular_match(vagas_filtradas: list[dict], perfil: dict) -> list[dict]:
-    """Calcula o score de cada vaga com base em pesos matemáticos refinados."""
     print("\n[FASE 4] Calculando a pontuação de aderência refinada (Match Score)...")
     vagas_pontuadas = []
 
@@ -80,16 +78,13 @@ def calcular_match(vagas_filtradas: list[dict], perfil: dict) -> list[dict]:
             if termo in titulo_vaga:
                 score -= 50
         
-        # Garante que o score não seja negativo
         vaga['match_score'] = max(0, score)
         vagas_pontuadas.append(vaga)
         
-    # Ordena as melhores vagas para o topo
     vagas_pontuadas.sort(key=lambda x: x.get('match_score', 0), reverse=True)
     return vagas_pontuadas
 
 def exibir_ranking(vagas_pontuadas: list[dict], limite: int = 15) -> None:
-    """Mostra o Top X de vagas com melhor Match Score."""
     print(f"\n{'='*60}")
     print(f"  🏆 TOP {limite} VAGAS MAIS ALINHADAS COM O SEU PERFIL")
     print(f"{'='*60}")
@@ -109,23 +104,21 @@ def exibir_ranking(vagas_pontuadas: list[dict], limite: int = 15) -> None:
         print(f"     Link        : {vaga['link']}")
         print(f"     {'-'*52}")
 
+
 # ====================================================================
 # ── FASE 5: ENVIO PARA O TELEGRAM COM BANCO DE DADOS (MEMÓRIA) ──────
 # ====================================================================
 
 def enviar_para_telegram(vagas_pontuadas: list[dict], limite: int = 15) -> None:
-    """Filtra vagas repetidas usando SQLite e envia apenas as inéditas para o Telegram."""
     import requests
     import os
     import sqlite3
 
     print("\n[FASE 5] Verificando vagas inéditas no Banco de Dados...")
 
-    # Conecta ao banco de dados (será criado na raiz do projeto se não existir)
     conn = sqlite3.connect("vagas_enviadas.db")
     cursor = conn.cursor()
 
-    # Cria a tabela para guardar os links se ela não existir
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS enviadas (
             link TEXT PRIMARY KEY,
@@ -134,24 +127,17 @@ def enviar_para_telegram(vagas_pontuadas: list[dict], limite: int = 15) -> None:
     """)
     conn.commit()
 
-    # Pegar as credenciais do ambiente
     TOKEN = os.environ.get("TELEGRAM_TOKEN")
     CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-    # Filtra apenas vagas com score positivo
     melhores_vagas = [v for v in vagas_pontuadas if v['match_score'] > 0]
-    
     vagas_ineditas = []
 
-    # Testa vaga por vaga no banco de dados
     for vaga in melhores_vagas:
         link = vaga['link']
         cursor.execute("SELECT 1 FROM enviadas WHERE link = ?", (link,))
         if cursor.fetchone() is None:
-            # Vaga não existe no banco, então é inédita!
             vagas_ineditas.append(vaga)
-            
-            # Se já atingimos o limite de envio para essa rodada, paramos de acumular
             if len(vagas_ineditas) >= limite:
                 break
 
@@ -162,7 +148,6 @@ def enviar_para_telegram(vagas_pontuadas: list[dict], limite: int = 15) -> None:
 
     print(f"  🔥 Encontrada(s) {len(vagas_ineditas)} vaga(s) inédita(s)! Enviando...")
 
-    # Montando a mensagem com as INÉDITAS
     mensagem = f"🚀 <b>NOVAS VAGAS INÉDITAS ({len(vagas_ineditas)})</b> 🚀\n\n"
     
     for numero, vaga in enumerate(vagas_ineditas, start=1):
@@ -174,13 +159,11 @@ def enviar_para_telegram(vagas_pontuadas: list[dict], limite: int = 15) -> None:
         mensagem += f"🏢 {empresa} | 📍 {vaga['local']}\n"
         mensagem += f"🔗 <a href='{vaga['link']}'>Acessar Vaga</a>\n\n"
         
-        # Salva o link no banco de dados para não repetir na próxima rodada
         cursor.execute("INSERT OR IGNORE INTO enviadas (link) VALUES (?)", (link,))
 
     conn.commit()
     conn.close()
 
-    # Envia para a API do Telegram
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     payload = {
         "chat_id": CHAT_ID,
@@ -201,18 +184,23 @@ def enviar_para_telegram(vagas_pontuadas: list[dict], limite: int = 15) -> None:
 
 # ====================================================================
 
-
 def main():
     print("\n" + "=" * 60)
     print("          🤖 JOBHUNTER AI — Sistema Completo")
-    print("     Gupy · Greenhouse · Indeed · LinkedIn — Somente Brasil")
+    print("     Gupy · Greenhouse · Indeed · LinkedIn · PDF Reader")
     print("=" * 60)
 
-    # ── FASE 3: Perfil ────────────────────────────────────────────
+    # ── FASE 3: Perfil (AGORA COM INTELIGÊNCIA ARTIFICIAL) ────────
     print("\n[FASE 3] Carregando perfil do candidato...")
+    
+    # Aciona o leitor de PDF. Se houver arquivo, ele atualiza o JSON.
+    try:
+        checar_e_atualizar_perfil()
+    except Exception as e:
+        print(f"  ⚠️ Aviso: Erro no leitor de PDF. Usando perfil atual. Detalhes: {e}")
+        
     perfil = carregar_perfil()
     exibir_perfil(perfil)
-
 
     # ── FASE 1: Busca ─────────────────────────────────────────────
     print("\n[FASE 1] Iniciando busca de vagas...")
@@ -227,7 +215,6 @@ def main():
         "backoffice financeiro",
         "analista de dados",
     ]
-
     for termo in termos_gupy:
         vagas = buscar_vagas_gupy(termo)
         todas_vagas.extend(vagas)
@@ -244,7 +231,6 @@ def main():
         "analista chargeback",
         "prevenção de fraudes",
     ]
-
     for termo in termos_indeed:
         vagas = buscar_vagas_indeed(termo, "Brasil")
         todas_vagas.extend(vagas)
@@ -257,7 +243,6 @@ def main():
         "analista chargeback",
         "prevenção de fraudes"
     ]
-    
     for termo in termos_linkedin:
         vagas = buscar_linkedin_rss(termo)
         todas_vagas.extend(vagas)
@@ -265,15 +250,11 @@ def main():
         
     # — LinkedIn Posts (Mercado Oculto via DuckDuckGo) —
     print("\n🔍 Acessando o mercado oculto de posts no LinkedIn...")
-    termos_ocultos = [
-        "antifraude",
-        "chargeback"
-    ]
-    
+    termos_ocultos = ["antifraude", "chargeback"]
     for termo in termos_ocultos:
         vagas = buscar_linkedin_posts(termo)
         todas_vagas.extend(vagas)
-        time.sleep(2) # Pausa maior para evitar que o buscador bloqueie o robô
+        time.sleep(2)
 
     print(f"\n  📥 Total bruto coletado: {len(todas_vagas)} vaga(s)")
 
@@ -291,7 +272,7 @@ def main():
 
     # ── Resumo ────────────────────────────────────────────────────
     print(f"\n{'='*60}")
-    print(f"  ✅ Pipeline completo! Fases 1 a 6 integradas.")
+    print(f"  ✅ Pipeline completo finalizado!")
     print(f"  → {len(todas_vagas)} vagas brutas coletadas")
     print(f"  → {len(vagas_filtradas)} vagas relevantes após filtro")
     print(f"  → Vagas inéditas filtradas pelo Banco de Dados")
