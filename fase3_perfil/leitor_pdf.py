@@ -18,38 +18,44 @@ def extrair_texto_pdf(caminho_pdf: str) -> str:
     return texto
 
 def processar_curriculo_com_ia(texto_cv: str) -> dict | None:
-    """Envia o texto para o Gemini montar o JSON perfeitamente estruturado."""
+    """Envia o texto para o Gemini montar o JSON mantendo a estrutura aninhada original."""
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         print("  ⚠️ GEMINI_API_KEY não configurada no ambiente. Pulando extração via IA.")
         return None
 
-    # Configura a IA usando o modelo mais rápido e leve
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel('gemini-1.5-flash')
 
     prompt = f"""
-    Você é um assistente de recrutamento de dados. Leia o texto de um currículo e transforme-o estritamente em um JSON válido.
+    Você é um assistente de recrutamento especializado em dados. Leia o texto de um currículo e transforme-o estritamente em um JSON válido.
 
-    Regras:
-    1. Retorne APENAS o objeto JSON. Nada de formatação markdown (```json).
-    2. Preencha todos os campos da estrutura abaixo baseando-se no currículo.
+    Regras Críticas:
+    1. Retorne APENAS o objeto JSON. Nada de formatação markdown (como ```json).
+    2. Mantenha EXATAMENTE a estrutura aninhada abaixo. Não crie chaves novas, não mude o nome das chaves.
 
-    Estrutura JSON:
+    Estrutura JSON obrigatória:
     {{
-        "nome": "Nome Completo",
-        "cargo_atual": "Cargo mais recente",
-        "empresa": "Empresa atual",
-        "experiencia_anos": 9,
-        "formacao": "Curso superior",
+      "nome": "Nome Completo Extraído",
+      "cargo_atual": "Cargo mais recente",
+      "empresa_atual": "Empresa mais recente",
+      "experiencia_anos": 9,
+      "habilidades": ["habilidade1", "habilidade2", "python", "sql"],
+      "certificacoes": ["certificacao1"],
+      "formacao": {{
+        "curso": "Nome do curso",
         "instituicao": "Instituição de ensino",
-        "conclusao": "Ano",
-        "habilidades": ["hab1", "hab2"],
-        "certificacoes": ["cert1"],
+        "conclusao_prevista": 2028,
+        "status": "em andamento ou concluído"
+      }},
+      "idiomas": ["idioma1", "idioma2"],
+      "preferencias_vaga": {{
         "modalidade": ["remoto", "híbrido", "presencial"],
         "areas": ["antifraude", "chargeback", "dados"],
         "nivel": ["júnior", "pleno"],
-        "salario_min": 3200
+        "salario_minimo": 3200
+      }},
+      "linkedin": "URL do linkedin se houver"
     }}
 
     Texto bruto do currículo:
@@ -60,7 +66,7 @@ def processar_curriculo_com_ia(texto_cv: str) -> dict | None:
         resposta = model.generate_content(prompt)
         json_texto = resposta.text.strip()
         
-        # Remove markdown se a IA colocar por teimosia
+        # Remove markdown se a IA colocar
         if json_texto.startswith("```"):
             json_texto = json_texto.split("\n", 1)[1].rsplit("\n", 1)[0]
             if json_texto.startswith("json"):
@@ -72,7 +78,7 @@ def processar_curriculo_com_ia(texto_cv: str) -> dict | None:
         return None
 
 def checar_e_atualizar_perfil() -> None:
-    """Procura o PDF na raiz do projeto e atualiza o json de perfil se achar."""
+    """Procura o PDF na raiz e atualiza o json de perfil se achar."""
     caminho_pdf = "curriculo.pdf"
     caminho_json = "fase3_perfil/perfil.json"
 
@@ -94,4 +100,4 @@ def checar_e_atualizar_perfil() -> None:
         else:
             print("  ⚠️ O arquivo PDF parece ser uma imagem ou está vazio/ilegível.")
     else:
-        print("\n[FASE 3 - PDF] Nenhum 'curriculo.pdf' novo encontrado. Mantendo o perfil atual.")
+        print("\n[FASE 3 - PDF] Nenhum 'curriculo.pdf' encontrado. Mantendo o perfil atual.")
