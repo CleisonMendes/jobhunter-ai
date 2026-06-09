@@ -6,9 +6,6 @@ import os
 
 st.set_page_config(page_title="JobHunter AI", page_icon="🤖", layout="wide")
 
-# ==========================================
-# CSS
-# ==========================================
 st.markdown("""
 <style>
 [data-testid="stMetricValue"] { font-size: 2rem !important; }
@@ -41,8 +38,7 @@ try:
             st.write(f"- {cert}")
 
     with st.sidebar.expander("🎯 Áreas Alvo"):
-        preferencias = perfil.get("preferencias_vaga", {})
-        for area in preferencias.get("areas", []):
+        for area in perfil.get("preferencias_vaga", {}).get("areas", []):
             st.write(f"- {area}")
 
     with st.sidebar.expander("🛠️ Habilidades Mapeadas"):
@@ -54,7 +50,6 @@ try:
 except Exception:
     st.sidebar.warning("⏳ Aguardando IA processar o perfil.json...")
 
-# ── Filtros ─────────────────────────────────────────────────────────
 st.sidebar.divider()
 st.sidebar.header("🎚️ Filtros")
 score_min    = st.sidebar.slider("Score mínimo de match", 0, 100, 0, step=5)
@@ -85,7 +80,6 @@ except Exception as e:
     conn.close()
     st.stop()
 
-# ── ITEM 3: Lê tabela de descartadas se existir ─────────────────────
 try:
     df_desc = pd.read_sql_query("SELECT * FROM descartadas", conn)
 except Exception:
@@ -107,7 +101,6 @@ for col, fallback in [('match_score', 0), ('titulo', '—'), ('empresa', '—'),
 
 df['match_score'] = pd.to_numeric(df['match_score'], errors='coerce').fillna(0).astype(int)
 
-# Aplica filtros
 df_filtrado = df[df['match_score'] >= score_min].copy()
 if fonte_filtro != "Todas":
     df_filtrado = df_filtrado[df_filtrado['fonte'] == fonte_filtro]
@@ -117,23 +110,28 @@ if fonte_filtro != "Todas":
 # ==========================================
 st.subheader("📊 Resumo da Execução")
 
-vagas_ouro     = (df_filtrado['match_score'] >= 80).sum()
+vagas_ouro     = (df_filtrado['match_score'] >= 85).sum()
 score_medio    = int(df_filtrado['match_score'].mean()) if not df_filtrado.empty else 0
 ultima_captura = df['data_envio'].max().strftime("%d/%m %H:%M") if not df.empty else "—"
 total_desc     = len(df_desc) if not df_desc.empty else 0
 
 c1, c2, c3, c4, c5, c6 = st.columns(6)
-c1.metric("🔥 Vagas inéditas",     len(df))
-c2.metric("🎯 Após filtros",       len(df_filtrado))
-c3.metric("⭐ Score médio",        f"{score_medio}%")
-c4.metric("🥇 Vagas ouro (≥80)",  vagas_ouro)
-c5.metric("🗃️ Descartadas",       total_desc)
-c6.metric("⏱️ Última captura",    ultima_captura)
+c1.metric("🔥 Vagas inéditas",    len(df))
+c2.metric("🎯 Após filtros",      len(df_filtrado))
+c3.metric("⭐ Score médio",       f"{score_medio}%")
+c4.metric("🚨 Vagas ouro (≥85)", vagas_ouro)
+c5.metric("🗃️ Descartadas",      total_desc)
+c6.metric("⏱️ Última captura",   ultima_captura)
+
+# Destaque visual se houver vagas ouro
+if vagas_ouro > 0:
+    st.error(f"🚨 **{vagas_ouro} vaga(s) OURO detectada(s) com score ≥ 85%!** Verifique o ranking abaixo.")
 
 st.divider()
 
 # ==========================================
 # 4. TABELA COM FORMATAÇÃO CONDICIONAL
+# ── ITEM 8: Botão de candidatura ─────────
 # ==========================================
 st.subheader("🏆 Ranking de Vagas")
 
@@ -141,27 +139,50 @@ if df_filtrado.empty:
     st.info("Nenhuma vaga encontrada com os filtros selecionados.")
 else:
     def colorir_score(val):
-        if val >= 80:   return 'background-color:#EAF3DE;color:#3B6D11;font-weight:600;'
+        if val >= 85:   return 'background-color:#D4EDDA;color:#155724;font-weight:700;'
         elif val >= 50: return 'background-color:#FAEEDA;color:#854F0B;font-weight:600;'
         else:           return 'background-color:#FCEBEB;color:#A32D2D;font-weight:600;'
 
     def badge_status(val):
-        if val >= 80:   return '🥇 Ouro'
+        if val >= 85:   return '🚨 Ouro'
         elif val >= 50: return '🥈 Prata'
         else:           return '🔴 Atenção'
 
     df_tabela = df_filtrado[['data_envio','titulo','empresa','fonte','local','match_score','link']].copy()
-    df_tabela = df_tabela.sort_values('match_score', ascending=False)
+    df_tabela = df_tabela.sort_values('match_score', ascending=False).reset_index(drop=True)
     df_tabela['status'] = df_tabela['match_score'].apply(badge_status)
-    df_tabela.columns   = ['Data/Hora','Cargo','Empresa','Fonte','Local','Score','Link','Status']
-    df_tabela['Data/Hora'] = df_tabela['Data/Hora'].dt.strftime('%d/%m %H:%M')
 
-    styled = (
-        df_tabela.style
-        .map(colorir_score, subset=['Score'])
-        .format({'Score': '{}%'})
-    )
-    st.dataframe(styled, use_container_width=True, hide_index=True)
+    # ── ITEM 8: Renderiza linha a linha com botão de candidatura ─────
+    st.markdown("##### Clique em **Candidatar** para abrir a vaga diretamente")
+
+    for _, row in df_tabela.iterrows():
+        score  = row['match_score']
+        titulo = str(row['titulo'])
+        emp    = str(row['empresa'])
+        local  = str(row['local'])
+        fonte  = str(row['fonte'])
+        link   = str(row['link'])
+        status = badge_status(score)
+
+        # Cor do container por score
+        if score >= 85:
+            border_color = "#28a745"
+        elif score >= 50:
+            border_color = "#fd7e14"
+        else:
+            border_color = "#dc3545"
+
+        with st.container():
+            st.markdown(f"""
+            <div style="border-left: 4px solid {border_color}; padding: 8px 14px; margin-bottom: 8px; border-radius: 4px; background: #fafafa;">
+                <b>{status} {titulo}</b><br>
+                <span style="color:#555; font-size:13px;">🏢 {emp} &nbsp;|&nbsp; 📍 {local} &nbsp;|&nbsp; 🔖 {fonte} &nbsp;|&nbsp; ⭐ {score}%</span>
+            </div>
+            """, unsafe_allow_html=True)
+
+            col_btn, col_link = st.columns([1, 5])
+            with col_btn:
+                st.link_button("👉 Candidatar", link, use_container_width=True)
 
 st.divider()
 
@@ -188,8 +209,7 @@ if df['match_score'].sum() > 0:
     score_por_dia = (
         df[df['match_score'] > 0]
         .groupby('Data')['match_score']
-        .mean().round(1)
-        .reset_index()
+        .mean().round(1).reset_index()
     )
     score_por_dia.columns = ['Data', 'Score Médio']
     score_por_dia['Data'] = pd.to_datetime(score_por_dia['Data'])
@@ -200,13 +220,12 @@ if df['match_score'].sum() > 0:
 st.divider()
 
 # ==========================================
-# 6. ITEM 3 — ABA DE DESCARTADAS
+# 6. ABA DE DESCARTADAS
 # ==========================================
 if not df_desc.empty:
     with st.expander(f"🗃️ Vagas Descartadas ({len(df_desc)}) — clique para analisar"):
-        st.caption("Vagas que não passaram no filtro. Use isso para ajustar os critérios.")
+        st.caption("Vagas que não passaram no filtro. Use para ajustar os critérios.")
 
-        # Agrupa por motivo
         motivos = df_desc['motivo'].value_counts().reset_index()
         motivos.columns = ['Motivo', 'Qtd']
         col_a, col_b = st.columns([1, 2])
@@ -215,7 +234,6 @@ if not df_desc.empty:
         with col_b:
             st.bar_chart(motivos.set_index('Motivo'), color="#E24B4A")
 
-        st.markdown("**Detalhamento:**")
         df_desc_display = df_desc[['titulo','empresa','fonte','local','motivo']].copy()
         df_desc_display.columns = ['Cargo','Empresa','Fonte','Local','Motivo do Descarte']
         st.dataframe(df_desc_display, use_container_width=True, hide_index=True)
