@@ -1,29 +1,22 @@
 """
 ==============================================
   JOBHUNTER AI — Fase 1: Buscador de Vagas
+  Bloco 3+: Captura de data de publicação
 ==============================================
 Fontes suportadas:
-  - Gupy        (API pública)
-  - Greenhouse  (API pública — XP, Stone, Nubank, etc)
-  - Indeed      (scraping via HTML)
-  - LinkedIn    (feed RSS público Brasil)
-
-Conceitos aprendidos nessa fase:
-  - Funções (def)
-  - Estruturas de repetição (for)
-  - Listas e dicionários
-  - Requests (requisição HTTP)
-  - BeautifulSoup (parsing HTML)
-  - Tratamento de erros (try/except)
+  - Gupy        (API pública — tem data)
+  - Greenhouse  (API pública — sem data)
+  - Indeed      (scraping — sem data confiável)
+  - LinkedIn    (RSS — tem pubDate)
+  - LinkedIn    (Posts via DuckDuckGo — sem data)
 """
 
 import requests
-from bs4 import BeautifulSoup
+import urllib.parse
 import time
-import urllib.parse  # Necessário para codificar termos de busca na URL
+from datetime import datetime, timezone
+from bs4 import BeautifulSoup
 
-
-# ── Configurações gerais ──────────────────────────────────────────────────────
 
 HEADERS = {
     "User-Agent": (
@@ -33,75 +26,86 @@ HEADERS = {
     )
 }
 
-# Empresas financeiras monitoradas no Greenhouse
-# Chave = nome exibido | Valor = slug usado na URL da API
 EMPRESAS_GREENHOUSE = {
-    "Nubank":       "nubank",
-    "Stone":        "stone",
-    "XP Inc.":      "xpinc",
-    "Pagar.me":     "pagarme",
-    "Creditas":     "creditas",
-    "Dock":         "dock",
-    "Quanto":       "quanto",
+    "Nubank":   "nubank",
+    "Stone":    "stone",
+    "XP Inc.":  "xpinc",
+    "Pagar.me": "pagarme",
+    "Creditas": "creditas",
+    "Dock":     "dock",
+    "Quanto":   "quanto",
 }
+
+
+# ── UTILITÁRIO: parse de data ─────────────────────────────────────────────────
+
+def _parse_data(texto: str | None) -> datetime | None:
+    """
+    Tenta converter uma string de data para datetime com timezone UTC.
+    Aceita formatos ISO 8601 e RFC 2822 (usado no RSS).
+    Retorna None se não conseguir parsear.
+    """
+    if not texto:
+        return None
+    formatos = [
+        "%Y-%m-%dT%H:%M:%S.%fZ",
+        "%Y-%m-%dT%H:%M:%SZ",
+        "%Y-%m-%dT%H:%M:%S%z",
+        "%Y-%m-%d",
+        "%a, %d %b %Y %H:%M:%S %z",   # RFC 2822 — usado no RSS
+        "%a, %d %b %Y %H:%M:%S GMT",
+    ]
+    for fmt in formatos:
+        try:
+            dt = datetime.strptime(texto.strip(), fmt)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except ValueError:
+            continue
+    return None
 
 
 # ── FONTE 1: Gupy ─────────────────────────────────────────────────────────────
 
 def buscar_vagas_gupy(cargo: str) -> list[dict]:
-    """
-    Busca vagas na API pública da Gupy.
-
-    Parâmetros:
-        cargo (str): termo de busca, ex: "analista antifraude"
-
-    Retorna:
-        list[dict]: lista de vagas
-    """
     vagas_encontradas = []
     url = "https://portal.api.gupy.io/api/v1/jobs"
-
-    parametros = {
-        "jobName": cargo,
-        "limit":   20,
-        "offset":  0
-    }
+    parametros = {"jobName": cargo, "limit": 20, "offset": 0}
 
     try:
         print(f"\n🔍 [Gupy] Buscando: '{cargo}'...")
-
         resposta = requests.get(url, params=parametros, headers=HEADERS, timeout=10)
         resposta.raise_for_status()
 
-        dados       = resposta.json()
-        lista_vagas = dados.get("data", [])
-
-        for vaga in lista_vagas:
+        for vaga in resposta.json().get("data", []):
             titulo  = vaga.get("name", "Sem título")
             empresa = vaga.get("company", {}).get("name", "Empresa não informada")
-            link    = vaga.get("jobUrl", "Link não disponível")
+            link    = vaga.get("jobUrl", "")
             cidade  = vaga.get("city", "")
             estado  = vaga.get("state", "")
             local   = f"{cidade}/{estado}" if cidade else "Remoto / Não informado"
 
+            # ── DATA: Gupy retorna publishedDate no JSON ──────────────
+            data_pub = _parse_data(vaga.get("publishedDate") or vaga.get("createdAt"))
+
             vagas_encontradas.append({
-                "titulo":  titulo,
-                "empresa": empresa,
-                "local":   local,
-                "link":    link,
-                "fonte":   "Gupy"
+                "titulo":       titulo,
+                "empresa":      empresa,
+                "local":        local,
+                "link":         link,
+                "fonte":        "Gupy",
+                "data_pub":     data_pub,
             })
 
         print(f"   ✅ {len(vagas_encontradas)} vaga(s) encontrada(s)")
 
     except requests.exceptions.Timeout:
         print("   ⚠️  Timeout — Gupy demorou para responder.")
-    except requests.exceptions.ConnectionError:
-        print("   ⚠️  Sem conexão com a internet.")
-    except requests.exceptions.HTTPError as erro:
-        print(f"   ⚠️  Erro HTTP: {erro}")
-    except Exception as erro:
-        print(f"   ⚠️  Erro inesperado: {erro}")
+    except requests.exceptions.HTTPError as e:
+        print(f"   ⚠️  Erro HTTP Gupy: {e}")
+    except Exception as e:
+        print(f"   ⚠️  Erro inesperado Gupy: {e}")
 
     return vagas_encontradas
 
@@ -109,237 +113,199 @@ def buscar_vagas_gupy(cargo: str) -> list[dict]:
 # ── FONTE 2: Greenhouse ───────────────────────────────────────────────────────
 
 def buscar_vagas_greenhouse(empresa_nome: str, empresa_slug: str) -> list[dict]:
-    """
-    Busca TODAS as vagas abertas de uma empresa no Greenhouse.
-    O Greenhouse tem API pública por empresa — sem necessidade de autenticação.
-
-    Parâmetros:
-        empresa_nome (str): nome para exibição, ex: "Nubank"
-        empresa_slug (str): slug da empresa na URL, ex: "nubank"
-
-    Retorna:
-        list[dict]: lista de vagas da empresa
-    """
     vagas_encontradas = []
-
-    # URL padrão da API pública do Greenhouse
     url = f"https://boards-api.greenhouse.io/v1/boards/{empresa_slug}/jobs"
 
     try:
         print(f"\n🔍 [Greenhouse] Buscando vagas em: {empresa_nome}...")
-
         resposta = requests.get(url, headers=HEADERS, timeout=10)
         resposta.raise_for_status()
 
-        dados       = resposta.json()
-        lista_vagas = dados.get("jobs", [])
-
-        for vaga in lista_vagas:
+        for vaga in resposta.json().get("jobs", []):
             titulo = vaga.get("title", "Sem título")
-            link   = vaga.get("absolute_url", "Link não disponível")
+            link   = vaga.get("absolute_url", "")
+            local  = vaga.get("location", {}).get("name", "Não informado")
 
-            # Localização vem dentro de "location"
-            local_info = vaga.get("location", {})
-            local      = local_info.get("name", "Não informado")
-
+            # ── DATA: Greenhouse não expõe data na API pública ────────
+            # Marcamos None — o filtro vai tratar com tolerância máxima
             vagas_encontradas.append({
-                "titulo":  titulo,
-                "empresa": empresa_nome,
-                "local":   local,
-                "link":    link,
-                "fonte":   "Greenhouse"
+                "titulo":   titulo,
+                "empresa":  empresa_nome,
+                "local":    local,
+                "link":     link,
+                "fonte":    "Greenhouse",
+                "data_pub": None,
             })
 
         print(f"   ✅ {len(vagas_encontradas)} vaga(s) encontrada(s)")
 
-    except requests.exceptions.Timeout:
-        print(f"   ⚠️  Timeout — {empresa_nome} demorou para responder.")
-    except requests.exceptions.HTTPError as erro:
-        # 404 = empresa não encontrada no Greenhouse, não é erro crítico
-        if "404" in str(erro):
+    except requests.exceptions.HTTPError as e:
+        if "404" in str(e):
             print(f"   ⚠️  {empresa_nome} não encontrada no Greenhouse.")
         else:
-            print(f"   ⚠️  Erro HTTP: {erro}")
-    except requests.exceptions.ConnectionError:
-        print("   ⚠️  Sem conexão com a internet.")
-    except Exception as erro:
-        print(f"   ⚠️  Erro inesperado: {erro}")
+            print(f"   ⚠️  Erro HTTP: {e}")
+    except Exception as e:
+        print(f"   ⚠️  Erro inesperado Greenhouse: {e}")
 
     return vagas_encontradas
 
 
 def buscar_todas_greenhouse() -> list[dict]:
-    """
-    Percorre todas as empresas em EMPRESAS_GREENHOUSE e coleta vagas.
-
-    Retorna:
-        list[dict]: todas as vagas encontradas no Greenhouse
-    """
     todas = []
-
     for nome, slug in EMPRESAS_GREENHOUSE.items():
-        vagas = buscar_vagas_greenhouse(nome, slug)
-        todas.extend(vagas)
-        time.sleep(1)   # pausa entre empresas — boa prática
-
+        todas.extend(buscar_vagas_greenhouse(nome, slug))
+        time.sleep(1)
     return todas
 
 
 # ── FONTE 3: Indeed ───────────────────────────────────────────────────────────
 
 def buscar_vagas_indeed(cargo: str, local: str = "Brasil") -> list[dict]:
-    """
-    Busca vagas no Indeed Brasil via scraping de HTML.
-    
-    Atenção: scraping é menos estável que API — o Indeed pode bloquear
-    ou mudar o layout. Se parar de funcionar, é normal.
-
-    Parâmetros:
-        cargo (str): cargo buscado, ex: "analista antifraude"
-        local (str): localidade, padrão "Brasil"
-
-    Retorna:
-        list[dict]: lista de vagas
-    """
     vagas_encontradas = []
-
-    # Monta a URL de busca do Indeed Brasil
     cargo_url = cargo.replace(" ", "+")
     local_url = local.replace(" ", "+")
     url = f"https://br.indeed.com/jobs?q={cargo_url}&l={local_url}&sort=date"
 
     try:
         print(f"\n🔍 [Indeed] Buscando: '{cargo}'...")
-
         resposta = requests.get(url, headers=HEADERS, timeout=10)
         resposta.raise_for_status()
 
-        soup = BeautifulSoup(resposta.text, "html.parser")
-
-        # Indeed usa a classe "job_seen_beacon" para cada card de vaga
+        soup  = BeautifulSoup(resposta.text, "html.parser")
         cards = soup.find_all("div", class_="job_seen_beacon")
-
         if not cards:
-            # Tenta seletor alternativo caso o layout mude
             cards = soup.find_all("div", attrs={"data-testid": "slider_container"})
 
-        for card in cards[:15]:   # limita a 15 por busca
+        for card in cards[:15]:
             try:
-                # Título da vaga
-                titulo_tag = card.find("h2", class_="jobTitle")
-                titulo     = titulo_tag.get_text(strip=True) if titulo_tag else "Sem título"
-
-                # Nome da empresa
+                titulo_tag  = card.find("h2", class_="jobTitle")
                 empresa_tag = card.find("span", attrs={"data-testid": "company-name"})
-                empresa     = empresa_tag.get_text(strip=True) if empresa_tag else "Empresa não informada"
+                local_tag   = card.find("div", attrs={"data-testid": "text-location"})
+                link_tag    = card.find("a", class_="jcs-JobTitle")
 
-                # Localização
-                local_tag = card.find("div", attrs={"data-testid": "text-location"})
-                local_vaga = local_tag.get_text(strip=True) if local_tag else "Não informado"
-
-                # Link — Indeed usa links relativos, precisa montar a URL completa
-                link_tag = card.find("a", class_="jcs-JobTitle")
-                if link_tag and link_tag.get("href"):
-                    link = "https://br.indeed.com" + link_tag["href"]
-                else:
-                    link = "Link não disponível"
+                titulo     = titulo_tag.get_text(strip=True)  if titulo_tag  else "Sem título"
+                empresa    = empresa_tag.get_text(strip=True) if empresa_tag else "Empresa não informada"
+                local_vaga = local_tag.get_text(strip=True)   if local_tag   else "Não informado"
+                link       = ("https://br.indeed.com" + link_tag["href"]) if link_tag and link_tag.get("href") else ""
 
                 vagas_encontradas.append({
-                    "titulo":  titulo,
-                    "empresa": empresa,
-                    "local":   local_vaga,
-                    "link":    link,
-                    "fonte":   "Indeed"
+                    "titulo":   titulo,
+                    "empresa":  empresa,
+                    "local":    local_vaga,
+                    "link":     link,
+                    "fonte":    "Indeed",
+                    "data_pub": None,  # Indeed não expõe data de forma confiável no scraping
                 })
-
             except Exception:
-                # Se um card falhar, continua para o próximo
                 continue
 
         print(f"   ✅ {len(vagas_encontradas)} vaga(s) encontrada(s)")
 
-    except requests.exceptions.Timeout:
-        print("   ⚠️  Timeout — Indeed demorou para responder.")
-    except requests.exceptions.ConnectionError:
-        print("   ⚠️  Sem conexão com a internet.")
-    except requests.exceptions.HTTPError as erro:
-        print(f"   ⚠️  Erro HTTP Indeed: {erro}")
-    except Exception as erro:
-        print(f"   ⚠️  Erro inesperado: {erro}")
+    except requests.exceptions.HTTPError as e:
+        print(f"   ⚠️  Erro HTTP Indeed: {e}")
+    except Exception as e:
+        print(f"   ⚠️  Erro inesperado Indeed: {e}")
 
     return vagas_encontradas
 
 
-# ── FONTE 4: LinkedIn ─────────────────────────────────────────────────────────
+# ── FONTE 4: LinkedIn RSS ─────────────────────────────────────────────────────
 
 def buscar_linkedin_rss(termo: str) -> list[dict]:
-    """
-    Busca vagas no LinkedIn através do feed RSS público (Sem restrições de API).
-    
-    Parâmetros:
-        termo (str): cargo buscado, ex: "analista antifraude"
-
-    Retorna:
-        list[dict]: lista de vagas
-    """
     vagas_encontradas = []
-    
-    # Codifica o termo para a URL (ex: 'analista de fraude' vira 'analista%20de%20fraude')
-    termo_codificado = urllib.parse.quote(termo)
-    
-    # URL do feed de empregos do LinkedIn focado no Brasil (geoId 106057199)
+    termo_codificado  = urllib.parse.quote(termo)
     url = f"https://www.linkedin.com/jobs/search-api/feed?keywords={termo_codificado}&location=Brazil&geoId=106057199"
-    
+
     try:
         print(f"\n🔍 [LinkedIn] Buscando: '{termo}'...")
         resposta = requests.get(url, headers=HEADERS, timeout=10)
-        
+
         if resposta.status_code == 200:
-            # O feed RSS do LinkedIn usa formato XML. O BeautifulSoup lê perfeitamente.
-            soup = BeautifulSoup(resposta.text, 'xml')
+            soup  = BeautifulSoup(resposta.text, 'xml')
             itens = soup.find_all('item')
-            
+
             for item in itens:
-                titulo = item.find('title').text.strip() if item.find('title') else "Vaga sem título"
-                link = item.find('link').text.strip() if item.find('link') else ""
-                
-                # O LinkedIn costuma colocar a empresa no formato "Título da Vaga na Empresa"
+                titulo  = item.find('title').text.strip() if item.find('title') else "Vaga sem título"
+                link    = item.find('link').text.strip()  if item.find('link')  else ""
                 empresa = "Não especificada (LinkedIn)"
+
                 if " em " in titulo:
                     partes = titulo.split(" em ")
-                    titulo = partes[0]
+                    titulo  = partes[0]
                     empresa = partes[1]
                 elif " at " in titulo:
                     partes = titulo.split(" at ")
-                    titulo = partes[0]
+                    titulo  = partes[0]
                     empresa = partes[1]
-                
+
+                # ── DATA: RSS tem pubDate ─────────────────────────────
+                pub_date_tag = item.find('pubDate')
+                data_pub = _parse_data(pub_date_tag.text if pub_date_tag else None)
+
                 vagas_encontradas.append({
-                    "titulo": titulo,
-                    "empresa": empresa,
-                    "local": "Brasil",
-                    "link": link,
-                    "fonte": "LinkedIn (RSS)"
+                    "titulo":   titulo,
+                    "empresa":  empresa,
+                    "local":    "Brasil",
+                    "link":     link,
+                    "fonte":    "LinkedIn (RSS)",
+                    "data_pub": data_pub,
                 })
-                
+
         print(f"   ✅ {len(vagas_encontradas)} vaga(s) encontrada(s)")
-        
-    except requests.exceptions.Timeout:
-        print("   ⚠️  Timeout — LinkedIn demorou para responder.")
-    except requests.exceptions.ConnectionError:
-        print("   ⚠️  Sem conexão com a internet.")
+
     except Exception as e:
-        print(f"   ⚠️  Erro inesperado [LinkedIn]: {e}")
-        
+        print(f"   ⚠️  Erro inesperado [LinkedIn RSS]: {e}")
+
     return vagas_encontradas
 
 
-# ── Função de exibição ────────────────────────────────────────────────────────
+# ── FONTE 5: LinkedIn Posts (DuckDuckGo) ──────────────────────────────────────
+
+def buscar_linkedin_posts(termo: str) -> list[dict]:
+    print(f"  🕵️‍♂️ Caçando posts ocultos no LinkedIn para: {termo}")
+    vagas_encontradas = []
+
+    query   = f'site:linkedin.com/posts "vaga" "{termo}"'
+    url     = "https://html.duckduckgo.com/html/"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"}
+    payload = {"q": query}
+
+    try:
+        resposta = requests.post(url, headers=headers, data=payload, timeout=15)
+        if resposta.status_code == 200:
+            soup       = BeautifulSoup(resposta.text, 'lxml')
+            resultados = soup.find_all('div', class_='result')
+
+            for res in resultados:
+                elem_titulo = res.find('h2', class_='result__title')
+                elem_link   = res.find('a', class_='result__url')
+
+                if elem_titulo and elem_link:
+                    titulo_bruto = elem_titulo.text.strip()
+                    link         = elem_link.get('href', '')
+
+                    if '//duckduckgo.com/l/?' in link:
+                        parsed = urllib.parse.urlparse(link)
+                        link   = urllib.parse.parse_qs(parsed.query).get('uddg', [link])[0]
+
+                    if 'linkedin.com/posts' in link:
+                        vagas_encontradas.append({
+                            'titulo':   f"[POST] {titulo_bruto[:60]}...",
+                            'empresa':  'Postagem do LinkedIn',
+                            'local':    'Brasil (Verificar post)',
+                            'link':     link,
+                            'fonte':    'LinkedIn Posts',
+                            'data_pub': None,  # DuckDuckGo não retorna data
+                        })
+    except Exception as e:
+        print(f"  ❌ Erro ao buscar posts no DuckDuckGo: {e}")
+
+    return vagas_encontradas
+
+
+# ── Exibição ──────────────────────────────────────────────────────────────────
 
 def exibir_vagas(vagas: list[dict]) -> None:
-    """
-    Exibe as vagas encontradas de forma organizada no terminal.
-    """
     if not vagas:
         print("\n❌ Nenhuma vaga encontrada.")
         return
@@ -349,94 +315,24 @@ def exibir_vagas(vagas: list[dict]) -> None:
     print(f"{'='*60}")
 
     for numero, vaga in enumerate(vagas, start=1):
+        data_str = vaga['data_pub'].strftime('%d/%m/%Y') if vaga.get('data_pub') else "Data n/d"
         print(f"\n[{numero:02d}] {vaga['titulo']}")
-        print(f"     Empresa : {vaga['empresa']}")
-        print(f"     Local   : {vaga['local']}")
-        print(f"     Fonte   : {vaga['fonte']}")
-        print(f"     Link    : {vaga['link']}")
+        print(f"     Empresa     : {vaga['empresa']}")
+        print(f"     Local       : {vaga['local']}")
+        print(f"     Publicada   : {data_str}")
+        print(f"     Fonte       : {vaga['fonte']}")
+        print(f"     Link        : {vaga['link']}")
         print(f"     {'-'*52}")
 
 
-# ── Teste isolado ─────────────────────────────────────────────────────────────
-
 if __name__ == "__main__":
-    print("=" * 60)
-    print("     JOBHUNTER AI — Fase 1: Buscador (v3)")
-    print("=" * 60)
-
     todas = []
-
-    # Gupy
     todas.extend(buscar_vagas_gupy("analista antifraude"))
     time.sleep(1)
-
-    # Greenhouse — todas as empresas monitoradas
     todas.extend(buscar_todas_greenhouse())
-
-    # Indeed
     todas.extend(buscar_vagas_indeed("analista antifraude"))
     time.sleep(1)
-    
-    # LinkedIn
     todas.extend(buscar_linkedin_rss("analista antifraude"))
     time.sleep(1)
-
     exibir_vagas(todas)
     print(f"\n📊 Total: {len(todas)} vaga(s)")
-
-def buscar_linkedin_posts(termo: str) -> list[dict]:
-    """
-    Busca postagens recentes (mercado oculto) no LinkedIn usando o DuckDuckGo 
-    para contornar bloqueios de IP de servidores Cloud.
-    """
-    import requests
-    from bs4 import BeautifulSoup
-
-    print(f"  🕵️‍♂️ Caçando posts ocultos no LinkedIn para: {termo}")
-    vagas_encontradas = []
-
-    # Dork: Pesquisa estritamente por posts no LinkedIn que contenham a palavra "vaga" e o termo desejado
-    query = f'site:linkedin.com/posts "vaga" "{termo}"'
-    url = "https://html.duckduckgo.com/html/"
-    
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
-    
-    # O DuckDuckGo HTML aceita buscas via método POST
-    payload = {"q": query}
-
-    try:
-        resposta = requests.post(url, headers=headers, data=payload, timeout=15)
-        if resposta.status_code == 200:
-            soup = BeautifulSoup(resposta.text, 'lxml')
-            
-            # Pega todos os blocos de resultados
-            resultados = soup.find_all('div', class_='result')
-            
-            for res in resultados:
-                elemento_titulo = res.find('h2', class_='result__title')
-                elemento_link = res.find('a', class_='result__url')
-                
-                if elemento_titulo and elemento_link:
-                    titulo_bruto = elemento_titulo.text.strip()
-                    link = elemento_link.get('href', '')
-                    
-                    # Limpa a URL que o DDG as vezes encapsula
-                    if '//duckduckgo.com/l/?' in link:
-                        import urllib.parse
-                        parsed = urllib.parse.urlparse(link)
-                        link = urllib.parse.parse_qs(parsed.query).get('uddg', [link])[0]
-                    
-                    if 'linkedin.com/posts' in link:
-                        vagas_encontradas.append({
-                            'titulo': f"[POST] {titulo_bruto[:60]}...", # Indica que é um post e limita o tamanho
-                            'empresa': 'Postagem do LinkedIn',
-                            'local': 'Brasil (Verificar post)',
-                            'link': link,
-                            'fonte': 'LinkedIn Posts'
-                        })
-    except Exception as e:
-        print(f"  ❌ Erro ao buscar posts no DuckDuckGo: {e}")
-
-    return vagas_encontradas
