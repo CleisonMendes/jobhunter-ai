@@ -169,7 +169,7 @@ else:
 
     styled = (
         df_tabela.style
-        .applymap(colorir_score, subset=['Score'])
+        .map(colorir_score, subset=['Score']) # <--- Mudamos de applymap para map
         .format({'Score': '{}%'})
     )
 
