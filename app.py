@@ -61,6 +61,8 @@ if os.path.exists(db_path):
 
     if not df.empty:
         df['data_envio'] = pd.to_datetime(df['data_envio'])
+        # Converte para data e ajusta o fuso horário do servidor (UTC) para o Brasil (UTC-3)
+        df['data_envio'] = df['data_envio'] - pd.Timedelta(hours=3)
         
         col1, col2 = st.columns(2)
         col1.metric("🔥 Total de Vagas Inéditas", len(df))
