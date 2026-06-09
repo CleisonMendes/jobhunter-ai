@@ -4,53 +4,29 @@ import pandas as pd
 import json
 import os
 
-# Configuração da página
-st.set_page_config(page_title="JobHunter AI", page_icon="🤖", layout="wide")
-
-st.title("🤖 Painel de Controle - JobHunter AI")
-st.markdown("Monitoramento em tempo real da sua automação de caça a vagas.")
+st.set_page_config(page_title="JobHunter AI Pro", page_icon="📈", layout="wide")
 
 # ==========================================
-# 1. BARRA LATERAL (PERFIL)
+# 1. BARRA LATERAL (FILTROS E PERFIL)
 # ==========================================
 try:
     with open("fase3_perfil/perfil.json", "r", encoding="utf-8") as f:
         perfil = json.load(f)
     
     st.sidebar.header("👤 Perfil Ativo")
-    st.sidebar.write(f"**Nome:** {perfil.get('nome', 'N/A')}")
     st.sidebar.write(f"**Cargo:** {perfil.get('cargo_atual', 'N/A')}")
-    st.sidebar.write(f"**Empresa:** {perfil.get('empresa_atual', 'N/A')}")
     
-    with st.sidebar.expander("🎓 Formação Acadêmica"):
-        formacao = perfil.get("formacao", {})
-        if isinstance(formacao, dict):
-            st.write(f"**Curso:** {formacao.get('curso', 'N/A')}")
-            st.write(f"**Local:** {formacao.get('instituicao', 'N/A')}")
-            st.write(f"**Status:** {formacao.get('status', 'N/A')} ({formacao.get('conclusao_prevista', '')})")
-        else:
-            st.write(formacao)
-
-    with st.sidebar.expander("📜 Cursos e Certificações"):
-        for cert in perfil.get("certificacoes", []):
-            st.write(f"- {cert}")
+    # Filtro Dinâmico
+    st.sidebar.divider()
+    st.sidebar.subheader("🎛️ Filtros de Relevância")
+    score_minimo = st.sidebar.slider("Aderência mínima (Match Score)", 0, 100, 50)
     
-    with st.sidebar.expander("🎯 Áreas Alvo"):
-        preferencias = perfil.get("preferencias_vaga", {})
-        for area in preferencias.get("areas", []):
-            st.write(f"- {area}")
-            
-    with st.sidebar.expander("🛠️ Habilidades Mapeadas"):
-        for hab in perfil.get("habilidades", []):
-            st.write(f"- {hab}")
-            
-    st.sidebar.success("Sincronizado com a IA")
-except Exception as e:
-    st.sidebar.warning("Aguardando IA processar o perfil.json...")
-
+except:
+    st.sidebar.warning("Perfil não carregado.")
+    score_minimo = 0
 
 # ==========================================
-# 2. ÁREA PRINCIPAL (ESTATÍSTICAS DO DB)
+# 2. CARREGAMENTO E FILTRAGEM
 # ==========================================
 db_path = "vagas_enviadas.db"
 
@@ -60,27 +36,52 @@ if os.path.exists(db_path):
     conn.close()
 
     if not df.empty:
-        df['data_envio'] = pd.to_datetime(df['data_envio'])
-        # Converte para data e ajusta o fuso horário do servidor (UTC) para o Brasil (UTC-3)
-        df['data_envio'] = df['data_envio'] - pd.Timedelta(hours=3)
+        df['data_envio'] = pd.to_datetime(df['data_envio']) - pd.Timedelta(hours=3)
+        # Nota: Certifique-se de que o seu robô está salvando 'match_score' no BD. 
+        # Se não estiver, o filtro de score será aplicado apenas no que estiver na memória.
         
-        col1, col2 = st.columns(2)
-        col1.metric("🔥 Total de Vagas Inéditas", len(df))
-        col2.metric("⏱️ Última Vaga Capturada", df['data_envio'].max().strftime("%d/%m/%Y %H:%M"))
+        # Filtro aplicado
+        df_filtrado = df[df['match_score'] >= score_minimo] if 'match_score' in df.columns else df
+
+        # ==========================================
+        # 3. PAINEL DE MÉTRICAS (KPIs)
+        # ==========================================
+        col1, col2, col3 = st.columns(3)
+        col1.metric("🔥 Vagas Totais", len(df))
+        if 'match_score' in df.columns:
+            col2.metric("🎯 Match Médio", f"{df['match_score'].mean():.1f}%")
+        col3.metric("⏱️ Última Captura", df['data_envio'].max().strftime("%d/%m %H:%M"))
 
         st.divider()
 
-        st.subheader("📈 Ritmo do Mercado (Vagas por Dia)")
-        df['Data'] = df['data_envio'].dt.date
-        vagas_por_dia = df.groupby('Data').size()
-        st.bar_chart(vagas_por_dia, color="#ff4b4b")
+        # ==========================================
+        # 4. TABELA COLORIDA E GRÁFICO
+        # ==========================================
+        tab1, tab2 = st.tabs(["📊 Visão Geral", "🔗 Tabela Detalhada"])
 
-        st.subheader("🔗 Histórico de Links Enviados")
-        df_display = df[['data_envio', 'link']].sort_values(by="data_envio", ascending=False)
-        df_display.columns = ['Data/Hora do Envio', 'Link da Vaga']
-        st.dataframe(df_display, use_container_width=True, hide_index=True)
-        
+        with tab1:
+            st.subheader("📈 Tendência do Mercado")
+            df['Data'] = df['data_envio'].dt.date
+            tendencia = df.groupby('Data').size()
+            st.area_chart(tendencia, color="#00cc96")
+
+        with tab2:
+            st.subheader("📋 Vagas Filtradas")
+            st.dataframe(
+                df_filtrado[['data_envio', 'titulo', 'empresa', 'match_score']].sort_values(by='match_score', ascending=False),
+                column_config={
+                    "match_score": st.column_config.ProgressColumn(
+                        "Aderência",
+                        help="Nível de compatibilidade com seu perfil",
+                        format="%d%%",
+                        min_value=0,
+                        max_value=100,
+                    ),
+                },
+                use_container_width=True,
+                hide_index=True
+            )
     else:
-        st.info("O banco de dados está pronto, mas nenhuma vaga inédita foi salva ainda.")
+        st.info("Banco de dados vazio.")
 else:
-    st.warning("Banco de dados ainda não foi criado pela automação. Aguarde a próxima execução.")
+    st.warning("Aguardando automação rodar.")
