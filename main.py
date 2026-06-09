@@ -68,7 +68,7 @@ def calcular_match(vagas_filtradas: list[dict], perfil: dict) -> list[dict]:
     vagas_pontuadas = []
     api_key = os.environ.get("GEMINI_API_KEY")
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-pro')
+    model = genai.GenerativeModel('gemini-1.5-flash-latest')
 
     perfil_resumido = {
         "cargo": perfil.get("cargo_atual"),
