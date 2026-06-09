@@ -1,20 +1,33 @@
 """
 ==============================================
   JOBHUNTER AI — Fase 2: Filtro Inteligente
-  Bloco 2: Pré-filtro refinado + termos compostos
+  Bloco 3+: Filtro de recência + bônus de data
 ==============================================
+
+Regras de recência:
+  - > 30 dias → DESCARTADA (muito antiga)
+  - 16–30 dias → baixa prioridade (sem bônus)
+  - 8–15 dias  → intermediária (+2 pts bônus)
+  - 0–7 dias   → alta prioridade (+5 pts bônus)
+  - sem data   → aceita sem bônus (Greenhouse, Indeed, Posts)
 """
 
-# ── Palavras-chave por categoria ─────────────────────────────────────────────
-#
-# BLOCO 2 — Refinamento do pré-filtro:
-# Adicionados termos compostos específicos para reduzir falsos positivos.
-# Termos genéricos como "data" e "dados" foram movidos para baixa prioridade
-# para não deixar passar vagas de Data Engineer Sênior irrelevantes.
+from datetime import datetime, timezone
+
+# ── Configuração de recência ──────────────────────────────────────────────────
+
+DIAS_MAXIMOS       = 30   # vagas mais antigas são descartadas
+DIAS_INTERMEDIARIO = 15   # a partir daqui ganha bônus intermediário
+DIAS_ALTA          = 7    # a partir daqui ganha bônus alto
+
+BONUS_ALTA          = 5
+BONUS_INTERMEDIARIO = 2
+BONUS_BAIXA         = 0
+
+
+# ── Palavras-chave por categoria ──────────────────────────────────────────────
 
 PALAVRAS_CHAVE = {
-
-    # Alta prioridade — área principal (peso 3)
     "alta": [
         "analista antifraude",
         "analista de antifraude",
@@ -34,8 +47,6 @@ PALAVRAS_CHAVE = {
         "contestação",
         "contestacao",
     ],
-
-    # Média prioridade — skills técnicas relevantes (peso 2)
     "media": [
         "analista de dados",
         "data analyst",
@@ -56,9 +67,6 @@ PALAVRAS_CHAVE = {
         "payments",
         "automação",
     ],
-
-    # Baixa prioridade — contexto amplo (peso 1)
-    # Termos genéricos ficam aqui para não inflar o score de vagas irrelevantes
     "baixa": [
         "dados",
         "data",
@@ -77,8 +85,6 @@ PALAVRAS_CHAVE = {
     ]
 }
 
-# ── Títulos que devem ser barrados mesmo com score alto ──────────────────────
-# Evita que vagas claramente fora do perfil passem pelo filtro de relevância
 TITULOS_BLOQUEADOS = [
     "sênior", "senior", "sr.",
     "lead", "staff", "principal",
@@ -97,7 +103,6 @@ TITULOS_BLOQUEADOS = [
     "sales development",
 ]
 
-# ── Localidades brasileiras válidas ──────────────────────────────────────────
 LOCAIS_BRASIL = [
     "são paulo", "rio de janeiro", "minas gerais", "bahia", "paraná",
     "santa catarina", "rio grande do sul", "pernambuco", "ceará", "goiás",
@@ -117,6 +122,8 @@ LOCAIS_BLOQUEADOS = [
 ]
 
 
+# ── Funções auxiliares ────────────────────────────────────────────────────────
+
 def is_vaga_brasil(vaga: dict) -> bool:
     local = (vaga.get("local") or "").lower()
     for bloqueado in LOCAIS_BLOQUEADOS:
@@ -125,17 +132,45 @@ def is_vaga_brasil(vaga: dict) -> bool:
     for valido in LOCAIS_BRASIL:
         if valido in local:
             return True
-    return True  # dúvida = deixa passar
+    return True
 
 
 def is_titulo_bloqueado(titulo: str) -> bool:
-    """Retorna True se o título contiver algum termo bloqueado."""
     titulo_lower = titulo.lower()
     return any(termo in titulo_lower for termo in TITULOS_BLOQUEADOS)
 
 
+def calcular_bonus_recencia(data_pub) -> tuple[int, str]:
+    """
+    Calcula o bônus de recência e o label da faixa.
+
+    Retorna:
+        (bonus: int, label: str)
+        bonus = 0 e label = "sem data" quando data_pub é None
+        bonus = -999 indica que a vaga deve ser DESCARTADA
+    """
+    if data_pub is None:
+        return 0, "📅 sem data"
+
+    agora = datetime.now(timezone.utc)
+
+    # Garante que data_pub tem timezone
+    if data_pub.tzinfo is None:
+        data_pub = data_pub.replace(tzinfo=timezone.utc)
+
+    dias = (agora - data_pub).days
+
+    if dias > DIAS_MAXIMOS:
+        return -999, f"❌ {dias}d (muito antiga)"
+    elif dias <= DIAS_ALTA:
+        return BONUS_ALTA, f"🔥 {dias}d (alta)"
+    elif dias <= DIAS_INTERMEDIARIO:
+        return BONUS_INTERMEDIARIO, f"🟡 {dias}d (intermediária)"
+    else:
+        return BONUS_BAIXA, f"⚪ {dias}d (baixa)"
+
+
 def remover_duplicatas(vagas: list[dict]) -> list[dict]:
-    """Remove duplicatas por link."""
     vistos = set()
     unicas = []
     for vaga in vagas:
@@ -146,31 +181,40 @@ def remover_duplicatas(vagas: list[dict]) -> list[dict]:
     return unicas
 
 
+# ── Função principal ──────────────────────────────────────────────────────────
+
 def filtrar_vagas(vagas: list[dict]) -> list[dict]:
     """
-    Filtra e pontua vagas com base nas palavras-chave definidas.
+    Filtra e pontua vagas com base em palavras-chave e recência.
 
-    Pontuação:
-      - palavra de alta prioridade  → +3 pontos
-      - palavra de média prioridade → +2 pontos
-      - palavra de baixa prioridade → +1 ponto
+    Pontuação base:
+      - palavra alta   → +3
+      - palavra média  → +2
+      - palavra baixa  → +1
 
-    Vagas com título bloqueado são descartadas mesmo com score alto.
+    Bônus de recência (somado ao score base):
+      - 0–7 dias   → +5
+      - 8–15 dias  → +2
+      - 16–30 dias → +0
+      - >30 dias   → DESCARTADA (se data disponível)
+      - sem data   → aceita sem bônus
     """
     vagas = remover_duplicatas(vagas)
 
+    # Filtra por localidade
     vagas_brasil = [v for v in vagas if is_vaga_brasil(v)]
-    descartadas_pais = len(vagas) - len(vagas_brasil)
-    if descartadas_pais > 0:
-        print(f"  🌎 {descartadas_pais} vaga(s) descartada(s) por serem fora do Brasil")
+    desc_pais = len(vagas) - len(vagas_brasil)
+    if desc_pais > 0:
+        print(f"  🌎 {desc_pais} vaga(s) descartada(s) por serem fora do Brasil")
 
-    # Descarta títulos claramente fora do perfil
+    # Filtra por título
     vagas_relevantes = [v for v in vagas_brasil if not is_titulo_bloqueado(v.get('titulo', ''))]
-    descartadas_titulo = len(vagas_brasil) - len(vagas_relevantes)
-    if descartadas_titulo > 0:
-        print(f"  🚫 {descartadas_titulo} vaga(s) descartada(s) por título fora do perfil")
+    desc_titulo = len(vagas_brasil) - len(vagas_relevantes)
+    if desc_titulo > 0:
+        print(f"  🚫 {desc_titulo} vaga(s) descartada(s) por título fora do perfil")
 
     vagas_filtradas = []
+    desc_antigas    = 0
 
     for vaga in vagas_relevantes:
         texto = f"{vaga['titulo']} {vaga['empresa']}".lower()
@@ -189,15 +233,31 @@ def filtrar_vagas(vagas: list[dict]) -> list[dict]:
                         pontuacao += 1
                     palavras_achadas.append(palavra)
 
-        if pontuacao > 0:
-            vaga_com_score = vaga.copy()
-            vaga_com_score["relevancia"]       = pontuacao
-            vaga_com_score["palavras_achadas"] = list(set(palavras_achadas))
-            vagas_filtradas.append(vaga_com_score)
+        if pontuacao == 0:
+            continue
+
+        # Calcula bônus de recência
+        bonus, label_recencia = calcular_bonus_recencia(vaga.get('data_pub'))
+
+        if bonus == -999:
+            desc_antigas += 1
+            continue  # descarta vaga muito antiga
+
+        vaga_com_score = vaga.copy()
+        vaga_com_score["relevancia"]       = pontuacao + bonus
+        vaga_com_score["palavras_achadas"] = list(set(palavras_achadas))
+        vaga_com_score["recencia"]         = label_recencia
+        vaga_com_score["bonus_recencia"]   = bonus
+        vagas_filtradas.append(vaga_com_score)
+
+    if desc_antigas > 0:
+        print(f"  📅 {desc_antigas} vaga(s) descartada(s) por terem mais de {DIAS_MAXIMOS} dias")
 
     vagas_filtradas.sort(key=lambda v: v["relevancia"], reverse=True)
     return vagas_filtradas
 
+
+# ── Exibição ──────────────────────────────────────────────────────────────────
 
 def exibir_resultado_filtro(vagas_originais: list[dict], vagas_filtradas: list[dict]) -> None:
     print(f"\n{'='*60}")
@@ -209,35 +269,33 @@ def exibir_resultado_filtro(vagas_originais: list[dict], vagas_filtradas: list[d
     print(f"{'='*60}")
 
     if not vagas_filtradas:
-        print("\n❌ Nenhuma vaga relevante encontrada com os filtros atuais.")
-        print("💡 Dica: adicione mais palavras-chave em PALAVRAS_CHAVE")
+        print("\n❌ Nenhuma vaga relevante encontrada.")
         return
 
     for numero, vaga in enumerate(vagas_filtradas, start=1):
-        if vaga["relevancia"] >= 6:
+        if vaga["relevancia"] >= 8:
             icone = "🔥"
-        elif vaga["relevancia"] >= 3:
+        elif vaga["relevancia"] >= 4:
             icone = "✅"
         else:
             icone = "🔶"
 
+        recencia = vaga.get('recencia', '📅 sem data')
+        bonus    = vaga.get('bonus_recencia', 0)
+        bonus_str = f"+{bonus}pts" if bonus > 0 else ""
+
         print(f"\n{icone} [{numero:02d}] {vaga['titulo']}")
         print(f"      Empresa  : {vaga['empresa']}")
         print(f"      Local    : {vaga['local']}")
-        print(f"      Score    : {vaga['relevancia']} pontos")
+        print(f"      Score    : {vaga['relevancia']} pontos {bonus_str}")
+        print(f"      Recência : {recencia}")
         print(f"      Match    : {', '.join(vaga['palavras_achadas'])}")
         print(f"      Link     : {vaga['link']}")
         print(f"      {'-'*50}")
 
 
 if __name__ == "__main__":
-    vagas_exemplo = [
-        {"titulo": "Analista Antifraude Pleno", "empresa": "XP Inc.", "local": "São Paulo/SP", "link": "https://exemplo.com/1", "fonte": "Gupy"},
-        {"titulo": "Analista de Chargeback Jr", "empresa": "PicPay", "local": "São Paulo/SP", "link": "https://exemplo.com/2", "fonte": "Gupy"},
-        {"titulo": "Analista de Dados - Python", "empresa": "Nubank", "local": "Remoto", "link": "https://exemplo.com/3", "fonte": "Gupy"},
-        {"titulo": "Sênior Data Engineer", "empresa": "Stone", "local": "Remoto", "link": "https://exemplo.com/4", "fonte": "Greenhouse"},
-        {"titulo": "Assessoria de Investimentos", "empresa": "XP Inc.", "local": "São Paulo/SP", "link": "https://exemplo.com/5", "fonte": "Greenhouse"},
-        {"titulo": "Desenvolvedor Front-End", "empresa": "Startup XYZ", "local": "Remoto", "link": "https://exemplo.com/6", "fonte": "Gupy"},
-    ]
-    vagas_filtradas = filtrar_vagas(vagas_exemplo)
-    exibir_resultado_filtro(vagas_exemplo, vagas_filtradas)
+    from buscador import buscar_vagas_gupy
+    vagas = buscar_vagas_gupy("analista antifraude")
+    filtradas = filtrar_vagas(vagas)
+    exibir_resultado_filtro(vagas, filtradas)
