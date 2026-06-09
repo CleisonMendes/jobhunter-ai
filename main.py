@@ -48,40 +48,84 @@ def extrair_palavras_chave(perfil: dict) -> list:
     return list(set(palavras))
 
 def calcular_match(vagas_filtradas: list[dict], perfil: dict) -> list[dict]:
-    print("\n[FASE 4] Calculando a pontuação de aderência refinada (Match Score)...")
-    vagas_pontuadas = []
+    """Filtra as vagas básicas e usa IA para analisar contexto e gerar dossiê."""
+    print("\n[FASE 4] Triagem Híbrida e Inteligência Analítica (Match 2.0)...")
+    import os
+    import json
+    
+    # 1. PRÉ-FILTRO (Evitar estouro de limite da API)
+    vagas_pre_aprovadas = []
+    termos_chave = ["antifraude", "chargeback", "fraude", "risco", "dados", "data", "python", "sql", "backoffice"]
+    termos_barrar = ["sênior", "senior", "lead", "staff", "coordenador", "gerente", "manager"]
 
     for vaga in vagas_filtradas:
-        score = 0
-        titulo_vaga = vaga.get('titulo', '').lower()
-        
-        # 1. PESO CRÍTICO: Foco Principal (100 pontos)
-        termos_criticos = ["antifraude", "chargeback", "prevenção de fraude", "prevenção a fraude"]
-        for termo in termos_criticos:
-            if termo in titulo_vaga:
-                score += 100
-                
-        # 2. PESO ALTO: Ferramentas e Dados (40 pontos)
-        termos_altos = ["python", "sql", "dados", "data analyst", "bi"]
-        for termo in termos_altos:
-            if termo in titulo_vaga:
-                score += 40
-                
-        # 3. PESO MÉDIO: Negócio e Suporte (20 pontos)
-        termos_medios = ["financeiro", "backoffice", "risk", "risco", "compliance"]
-        for termo in termos_medios:
-            if termo in titulo_vaga:
-                score += 20
+        titulo = vaga.get('titulo', '').lower()
+        if any(termo in titulo for termo in termos_chave) and not any(termo in titulo for termo in termos_barrar):
+            vagas_pre_aprovadas.append(vaga)
 
-        # 4. PENALIZAÇÃO: Níveis acima do alvo (-50 pontos)
-        termos_barrar = ["sênior", "senior", "lead", "staff", "coordenador", "gerente", "manager"]
-        for termo in termos_barrar:
-            if termo in titulo_vaga:
-                score -= 50
+    if not vagas_pre_aprovadas:
+        return []
+
+    # 2. ANÁLISE IA (Match Score 2.0 e Dossiê)
+    vagas_pontuadas = []
+    api_key = os.environ.get("GEMINI_API_KEY")
+
+    if not api_key:
+        print("  ⚠️ GEMINI_API_KEY não encontrada. Abortando IA Analítica.")
+        return vagas_pre_aprovadas
+
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel('gemini-1.5-flash')
+
+    # Resumo do seu perfil para a IA ler mais rápido
+    perfil_resumido = {
+        "cargo": perfil.get("cargo_atual"),
+        "habilidades": perfil.get("habilidades"),
+        "areas": perfil.get("preferencias_vaga", {}).get("areas")
+    }
+
+    limite_analise = 10 # Limita para não estourar a API gratuita
+    print(f"  🧠 Analisando as {len(vagas_pre_aprovadas[:limite_analise])} melhores vagas com Gemini...")
+
+    for vaga in vagas_pre_aprovadas[:limite_analise]:
+        prompt = f"""
+        Você é um consultor de carreira avaliando uma vaga para o candidato.
+        Perfil do candidato: {json.dumps(perfil_resumido, ensure_ascii=False)}
+        Vaga: "{vaga['titulo']}" na empresa "{vaga['empresa']}"
+
+        Avalie a aderência de 0 a 100. Se a aderência for >= 75, crie um dossiê.
         
-        vaga['match_score'] = max(0, score)
-        vagas_pontuadas.append(vaga)
-        
+        Retorne EXATAMENTE neste formato JSON:
+        {{
+            "score": 85,
+            "resumo": "Uma frase curta explicando o porquê da nota.",
+            "perguntas_entrevista": ["Pergunta técnica 1", "Pergunta comportamental 2"],
+            "mensagem_linkedin": "Uma mensagem curta de 2 linhas para o candidato abordar o recrutador dessa empresa no LinkedIn ressaltando a experiência dele."
+        }}
+        """
+        try:
+            resposta = model.generate_content(prompt)
+            texto = resposta.text.strip()
+            
+            if texto.startswith("```"):
+                texto = texto.split("\n", 1)[1].rsplit("\n", 1)[0]
+            if texto.startswith("json"):
+                texto = texto.split("\n", 1)[1]
+
+            analise = json.loads(texto)
+            vaga['match_score'] = analise.get('score', 0)
+            vaga['resumo_ia'] = analise.get('resumo', '')
+            vaga['perguntas'] = analise.get('perguntas_entrevista', [])
+            vaga['mensagem_linkedin'] = analise.get('mensagem_linkedin', '')
+            
+            vagas_pontuadas.append(vaga)
+            time.sleep(4) 
+            
+        except Exception as e:
+            print(f"  ❌ Erro de IA na vaga {vaga['titulo']}: {e}")
+            vaga['match_score'] = 10
+            vagas_pontuadas.append(vaga)
+
     vagas_pontuadas.sort(key=lambda x: x.get('match_score', 0), reverse=True)
     return vagas_pontuadas
 
@@ -149,16 +193,32 @@ def enviar_para_telegram(vagas_pontuadas: list[dict], limite: int = 15) -> None:
 
     print(f"  🔥 Encontrada(s) {len(vagas_ineditas)} vaga(s) inédita(s)! Enviando...")
 
+    # Montando a mensagem VIP com Dossiê da IA
     mensagem = f"🚀 <b>NOVAS VAGAS INÉDITAS ({len(vagas_ineditas)})</b> 🚀\n\n"
     
     for numero, vaga in enumerate(vagas_ineditas, start=1):
+        link = vaga['link']
         titulo = vaga['titulo'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
         empresa = vaga['empresa'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+        score = vaga.get('match_score', 0)
         
         mensagem += f"<b>[{numero:02d}] {titulo}</b>\n"
-        mensagem += f"⭐ Score: {vaga['match_score']} pts\n"
         mensagem += f"🏢 {empresa} | 📍 {vaga['local']}\n"
-        mensagem += f"🔗 <a href='{vaga['link']}'>Acessar Vaga</a>\n\n"
+        mensagem += f"⭐ <b>Match Score: {score}%</b>\n"
+        
+        if vaga.get('resumo_ia'):
+            mensagem += f"🤖 <i>{vaga['resumo_ia']}</i>\n"
+        
+        mensagem += f"🔗 <a href='{link}'>Acessar Vaga</a>\n\n"
+        
+        # Só anexa o dossiê se a vaga for realmente boa (Score alto)
+        if score >= 75 and vaga.get('perguntas'):
+            mensagem += f"<b>💡 DOSSIÊ DE ENTREVISTA</b>\n"
+            for p in vaga['perguntas']:
+                mensagem += f"❓ {p}\n"
+            mensagem += f"💬 <b>Abordagem LinkedIn:</b>\n<i>{vaga['mensagem_linkedin']}</i>\n"
+            
+        mensagem += "───────────────────\n\n"
         
         cursor.execute("INSERT OR IGNORE INTO enviadas (link) VALUES (?)", (link,))
 
