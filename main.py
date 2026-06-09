@@ -2,6 +2,7 @@
 ==============================================
   JOBHUNTER AI — main.py (OTIMIZADO)
   Fases 1 a 7 — Execução Paralela + Timers
+  Bloco 1: Deduplicação + DB Enriquecido + Descartadas
 ==============================================
 """
 
@@ -41,6 +42,112 @@ class Timer:
     def __exit__(self, *args):
         elapsed = time.time() - self.inicio
         print(f"  ⏱️  [{self.nome}] concluído em {elapsed:.1f}s")
+
+
+# ====================================================================
+# ── ITEM 2: DEDUPLICAÇÃO ─────────────────────────────────────────────
+# ====================================================================
+
+def deduplicar_vagas(vagas: list[dict]) -> list[dict]:
+    """
+    Remove duplicatas com base no link (exato) e por similaridade
+    de título + empresa (evita a mesma vaga de fontes diferentes).
+    """
+    print("\n[DEDUP] Removendo duplicatas...")
+    vistas_por_link = set()
+    vistas_por_chave = set()
+    unicas = []
+
+    for vaga in vagas:
+        link = vaga.get('link', '').strip()
+        titulo = vaga.get('titulo', '').lower().strip()
+        empresa = vaga.get('empresa', '').lower().strip()
+
+        # Normaliza título removendo sufixos comuns de fontes
+        titulo_norm = re.sub(r'\s*[-|]\s*(linkedin|gupy|greenhouse|indeed).*$', '', titulo)
+
+        chave = f"{titulo_norm[:40]}|{empresa[:30]}"
+
+        if link and link in vistas_por_link:
+            continue
+        if chave in vistas_por_chave:
+            continue
+
+        if link:
+            vistas_por_link.add(link)
+        vistas_por_chave.add(chave)
+        unicas.append(vaga)
+
+    removidas = len(vagas) - len(unicas)
+    print(f"  🧹 {removidas} duplicata(s) removida(s) → {len(unicas)} vagas únicas")
+    return unicas
+
+
+# ====================================================================
+# ── ITEM 3: BANCO DE DESCARTADAS ─────────────────────────────────────
+# ====================================================================
+
+def salvar_descartadas(todas_vagas: list[dict], vagas_filtradas: list[dict]) -> None:
+    """
+    Salva as vagas que não passaram no filtro em uma tabela separada,
+    com o motivo do descarte para análise futura.
+    """
+    links_aprovados = {v.get('link') for v in vagas_filtradas}
+    descartadas = [v for v in todas_vagas if v.get('link') not in links_aprovados]
+
+    if not descartadas:
+        return
+
+    conn = sqlite3.connect("vagas_enviadas.db")
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS descartadas (
+            link        TEXT PRIMARY KEY,
+            titulo      TEXT,
+            empresa     TEXT,
+            fonte       TEXT,
+            local       TEXT,
+            motivo      TEXT,
+            data_descarte TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
+
+    inseridas = 0
+    for vaga in descartadas:
+        link   = vaga.get('link', '')
+        titulo = vaga.get('titulo', '—')
+        local  = vaga.get('local', '').lower()
+
+        # Tenta inferir o motivo do descarte
+        if any(pais in local for pais in ['united', 'mexico', 'colombia', 'argentina', 'usa', 'us', 'uk']):
+            motivo = "Fora do Brasil"
+        elif not link:
+            motivo = "Link inválido"
+        else:
+            motivo = "Não passou no filtro de relevância"
+
+        try:
+            cursor.execute("""
+                INSERT OR IGNORE INTO descartadas (link, titulo, empresa, fonte, local, motivo)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                link,
+                titulo,
+                vaga.get('empresa', '—'),
+                vaga.get('fonte', '—'),
+                vaga.get('local', '—'),
+                motivo
+            ))
+            if cursor.rowcount > 0:
+                inseridas += 1
+        except Exception:
+            pass
+
+    conn.commit()
+    conn.close()
+    print(f"  🗃️  {inseridas} vaga(s) nova(s) registrada(s) em 'descartadas'")
 
 
 # ====================================================================
@@ -229,7 +336,6 @@ def calcular_match(vagas_filtradas: list[dict], perfil: dict) -> list[dict]:
         return vaga
 
     with Timer("Análise IA (Gemini)"):
-        # max_workers=1 para respeitar rate limit por minuto
         with ThreadPoolExecutor(max_workers=1) as executor:
             futuros = [executor.submit(analisar_vaga, v) for v in vagas_pre_aprovadas[:limite_analise]]
             for futuro in as_completed(futuros):
@@ -265,7 +371,7 @@ def exibir_ranking(vagas_pontuadas: list[dict], limite: int = 15) -> None:
 
 
 # ====================================================================
-# ── FASE 5: TELEGRAM ─────────────────────────────────────────────────
+# ── FASE 5: TELEGRAM + BANCO ENRIQUECIDO ─────────────────────────────
 # ====================================================================
 
 def enviar_para_telegram(vagas_pontuadas: list[dict], limite: int = 15) -> None:
@@ -277,54 +383,60 @@ def enviar_para_telegram(vagas_pontuadas: list[dict], limite: int = 15) -> None:
 
     conn = sqlite3.connect("vagas_enviadas.db")
     cursor = conn.cursor()
-    
-    # 1. Criação da tabela com as colunas completas
+
+    # ── ITEM 1: Tabela com colunas completas ─────────────────────────
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS enviadas (
-            link TEXT PRIMARY KEY,
-            data_envio TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            titulo TEXT,
-            empresa TEXT,
-            fonte TEXT,
-            local TEXT,
+            link        TEXT PRIMARY KEY,
+            data_envio  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            titulo      TEXT,
+            empresa     TEXT,
+            fonte       TEXT,
+            local       TEXT,
             match_score INTEGER
         )
     """)
+
+    # Migração silenciosa: adiciona colunas se o banco já existia sem elas
+    colunas_novas = ['titulo', 'empresa', 'fonte', 'local', 'match_score']
+    cursor.execute("PRAGMA table_info(enviadas)")
+    colunas_existentes = {row[1] for row in cursor.fetchall()}
+    for col in colunas_novas:
+        if col not in colunas_existentes:
+            tipo = 'INTEGER' if col == 'match_score' else 'TEXT'
+            cursor.execute(f"ALTER TABLE enviadas ADD COLUMN {col} {tipo}")
+
     conn.commit()
 
-    TOKEN = os.environ.get("TELEGRAM_TOKEN")
+    TOKEN   = os.environ.get("TELEGRAM_TOKEN")
     CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
     vagas_ineditas = []
-    
-    # 2. Verifica inéditas e prepara inserção
     for vaga in vagas_pontuadas:
         cursor.execute("SELECT 1 FROM enviadas WHERE link = ?", (vaga['link'],))
         if cursor.fetchone() is None:
-            # Tenta salvar no banco
             try:
                 cursor.execute("""
-                    INSERT INTO enviadas (link, titulo, empresa, fonte, local, match_score) 
+                    INSERT INTO enviadas (link, titulo, empresa, fonte, local, match_score)
                     VALUES (?, ?, ?, ?, ?, ?)
                 """, (
-                    vaga['link'], 
-                    vaga.get('titulo', '—'), 
-                    vaga.get('empresa', '—'), 
-                    vaga.get('fonte', '—'), 
-                    vaga.get('local', '—'), 
+                    vaga['link'],
+                    vaga.get('titulo', '—'),
+                    vaga.get('empresa', '—'),
+                    vaga.get('fonte', '—'),
+                    vaga.get('local', '—'),
                     vaga.get('match_score', 0)
                 ))
                 vagas_ineditas.append(vaga)
             except Exception as e:
-                print(f"⚠️ Erro ao salvar vaga no banco: {e}")
-            
+                print(f"  ⚠️  Erro ao salvar vaga: {e}")
+
             if len(vagas_ineditas) >= limite:
                 break
 
     conn.commit()
     conn.close()
 
-    # 3. Envio para o Telegram (apenas se houver inéditas)
     if not vagas_ineditas:
         print("  🤫 Nenhuma vaga nova nesta rodada. Nada foi enviado.")
         return
@@ -352,11 +464,12 @@ def enviar_para_telegram(vagas_pontuadas: list[dict], limite: int = 15) -> None:
             for p in vaga['perguntas']:
                 mensagem += f"❓ {p}\n"
             mensagem += f"💬 <b>Abordagem LinkedIn:</b>\n<i>{vaga['mensagem_linkedin']}</i>\n"
+
         mensagem += "───────────────────\n\n"
 
-    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    url     = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
     payload = {"chat_id": CHAT_ID, "text": mensagem, "parse_mode": "HTML", "disable_web_page_preview": True}
-    
+
     try:
         requests.post(url, json=payload)
         print("  📱 ✅ Enviado com sucesso!")
@@ -390,18 +503,26 @@ def main():
     with Timer("FASE 1 — Busca total"):
         todas_vagas = buscar_todas_vagas_paralelo()
 
+    # ── ITEM 2: Deduplicação ─────────────────────────────────────────
+    with Timer("DEDUP — Deduplicação"):
+        todas_vagas = deduplicar_vagas(todas_vagas)
+
     # Fase 2: Filtro
     with Timer("FASE 2 — Filtro"):
         print("\n[FASE 2] Aplicando filtro — removendo fora do Brasil...")
         vagas_filtradas = filtrar_vagas(todas_vagas)
         exibir_resultado_filtro(todas_vagas, vagas_filtradas)
 
+    # ── ITEM 3: Salvar descartadas ───────────────────────────────────
+    with Timer("DEDUP — Salvando descartadas"):
+        salvar_descartadas(todas_vagas, vagas_filtradas)
+
     # Fase 4: Match Score
     with Timer("FASE 4 — Match Score"):
         vagas_com_score = calcular_match(vagas_filtradas, perfil)
         exibir_ranking(vagas_com_score, limite=15)
 
-    # Fase 5: Telegram
+    # Fase 5: Telegram + banco enriquecido
     with Timer("FASE 5 — Telegram"):
         enviar_para_telegram(vagas_com_score, limite=15)
 
@@ -409,7 +530,7 @@ def main():
     tempo_total = time.time() - inicio_total
     print(f"\n{'='*60}")
     print(f"  ✅ Pipeline completo em {tempo_total:.1f}s ({tempo_total/60:.1f} min)")
-    print(f"  → {len(todas_vagas)} vagas brutas coletadas")
+    print(f"  → {len(todas_vagas)} vagas únicas após deduplicação")
     print(f"  → {len(vagas_filtradas)} vagas relevantes após filtro")
     print(f"{'='*60}\n")
 
