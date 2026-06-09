@@ -14,6 +14,7 @@ Fontes ativas:
 
 import sys
 import time
+import google.generativeai as genai
 from pathlib import Path
 
 # Mantemos apenas as pastas das fases 1, 2 e 3
