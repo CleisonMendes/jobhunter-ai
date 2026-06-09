@@ -73,7 +73,7 @@ def calcular_match(vagas_filtradas: list[dict], perfil: dict) -> list[dict]:
     # Diagnóstico: Imprime os modelos disponíveis se houver erro
     try:
         # Tenta usar o modelo mais estável e padrão (gemini-pro)
-        model = genai.GenerativeModel('gemini-pro')
+        model = genai.GenerativeModel('gemini-3.5-flash')
     except Exception as e:
         print(f"  ❌ Erro ao inicializar gemini-pro: {e}")
         # Se falhar, lista os modelos para sabermos a verdade
