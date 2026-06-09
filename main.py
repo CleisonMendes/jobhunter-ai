@@ -164,21 +164,23 @@ def calcular_match(vagas_filtradas: list[dict], perfil: dict) -> list[dict]:
     limite_analise = 5
     vagas_pontuadas = []
 
-    def analisar_vaga(vaga):
-        prompt = f"""
-        Você é um consultor. Analise esta vaga para o candidato: {json.dumps(perfil_resumido, ensure_ascii=False)}
-        Vaga: "{vaga['titulo']}" na empresa "{vaga['empresa']}"
+def analisar_vaga(vaga):
+    prompt = f"""
+    Você é um consultor. Analise esta vaga para o candidato: {json.dumps(perfil_resumido, ensure_ascii=False)}
+    Vaga: "{vaga['titulo']}" na empresa "{vaga['empresa']}"
 
-        Avalie a aderência de 0 a 100.
-        Retorne APENAS um objeto JSON válido (começando com {{ e terminando com }}):
-        {{
-            "score": 85,
-            "resumo": "Explicação curta.",
-            "perguntas_entrevista": ["p1", "p2"],
-            "mensagem_linkedin": "abordagem curta."
-        }}
-        """
-        for nome_modelo in MODELOS_FALLBACK:
+    Avalie a aderência de 0 a 100.
+    Retorne APENAS um objeto JSON válido (começando com {{ e terminando com }}):
+    {{
+        "score": 85,
+        "resumo": "Explicação curta.",
+        "perguntas_entrevista": ["p1", "p2"],
+        "mensagem_linkedin": "abordagem curta."
+    }}
+    """
+    for nome_modelo in MODELOS_FALLBACK:
+        tentativas = 2  # tenta 2x no mesmo modelo antes de trocar
+        for tentativa in range(tentativas):
             try:
                 model = genai.GenerativeModel(nome_modelo)
                 resposta = model.generate_content(prompt)
@@ -194,14 +196,25 @@ def calcular_match(vagas_filtradas: list[dict], perfil: dict) -> list[dict]:
                     return vaga
                 else:
                     raise ValueError("JSON não encontrado na resposta")
-            except Exception as e:
-                print(f"  ⚠️  {nome_modelo} falhou para '{vaga['titulo'][:25]}': {e}")
-                continue  # tenta o próximo modelo
 
-        # Todos os modelos falharam
-        print(f"  ❌ Todos os modelos falharam para '{vaga['titulo'][:30]}'")
-        vaga['match_score'] = 10
-        return vaga
+            except Exception as e:
+                erro_str = str(e)
+                # Extrai o tempo de espera sugerido pela API (retry_delay)
+                espera = 15  # padrão se não encontrar
+                match_delay = re.search(r'retry_delay\s*\{\s*seconds:\s*(\d+)', erro_str)
+                if match_delay:
+                    espera = int(match_delay.group(1)) + 2  # +2s de margem
+
+                if '429' in erro_str and tentativa < tentativas - 1:
+                    print(f"  ⏳ {nome_modelo} — rate limit, aguardando {espera}s e tentando novamente...")
+                    time.sleep(espera)
+                else:
+                    print(f"  ⚠️  {nome_modelo} falhou para '{vaga['titulo'][:25]}': 429 rate limit")
+                    break  # passa para o próximo modelo
+
+    print(f"  ❌ Todos os modelos falharam para '{vaga['titulo'][:30]}'")
+    vaga['match_score'] = 10
+    return vaga
 
     with Timer("Análise IA (Gemini)"):
         with ThreadPoolExecutor(max_workers=3) as executor:
