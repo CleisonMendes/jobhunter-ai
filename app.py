@@ -129,7 +129,7 @@ vagas_ouro  = (df_filtrado['match_score'] >= 80).sum()
 vagas_prata = ((df_filtrado['match_score'] >= 50) & (df_filtrado['match_score'] < 80)).sum()
 vagas_atenc = (df_filtrado['match_score'] < 50).sum()
 score_medio = int(df_filtrado['match_score'].mean()) if not df_filtrado.empty else 0
-ultima_captura = df['data_envio'].max().strftime("%d/%m %H:%M") if not df.empty else "—"
+ultima_captura = df['data_envio'].max().strftime("%d/%m/%Y %H:%M") if not df.empty else "—"
 
 c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("🔥 Vagas inéditas",    len(df))
