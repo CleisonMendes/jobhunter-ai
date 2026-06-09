@@ -53,6 +53,7 @@ def calcular_match(vagas_filtradas: list[dict], perfil: dict) -> list[dict]:
     import json
     import re
     
+    # 1. PRÉ-FILTRO
     vagas_pre_aprovadas = []
     termos_chave = ["antifraude", "chargeback", "fraude", "risco", "dados", "data", "python", "sql", "backoffice"]
     termos_barrar = ["sênior", "senior", "lead", "staff", "coordenador", "gerente", "manager"]
@@ -65,10 +66,21 @@ def calcular_match(vagas_filtradas: list[dict], perfil: dict) -> list[dict]:
     if not vagas_pre_aprovadas:
         return []
 
-    vagas_pontuadas = []
+    # 2. CONFIGURAÇÃO ROBUSTA
     api_key = os.environ.get("GEMINI_API_KEY")
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-flash-latest')
+
+    # Diagnóstico: Imprime os modelos disponíveis se houver erro
+    try:
+        # Tenta usar o modelo mais estável e padrão (gemini-pro)
+        model = genai.GenerativeModel('gemini-pro')
+    except Exception as e:
+        print(f"  ❌ Erro ao inicializar gemini-pro: {e}")
+        # Se falhar, lista os modelos para sabermos a verdade
+        print("  🔍 Listando modelos disponíveis para debug:")
+        for m in genai.list_models():
+            print(f"  -> {m.name}")
+        return vagas_pre_aprovadas
 
     perfil_resumido = {
         "cargo": perfil.get("cargo_atual"),
@@ -76,48 +88,36 @@ def calcular_match(vagas_filtradas: list[dict], perfil: dict) -> list[dict]:
         "areas": perfil.get("preferencias_vaga", {}).get("areas")
     }
 
+    vagas_pontuadas = []
     limite_analise = 5
+
     for vaga in vagas_pre_aprovadas[:limite_analise]:
         prompt = f"""
-        Você é um consultor. Analise esta vaga para o candidato: {json.dumps(perfil_resumido, ensure_ascii=False)}
+        Analise esta vaga para o candidato: {json.dumps(perfil_resumido, ensure_ascii=False)}
         Vaga: "{vaga['titulo']}" na empresa "{vaga['empresa']}"
-
-        Avalie a aderência de 0 a 100.
-        Retorne APENAS um objeto JSON válido (começando com {{ e terminando com }}):
-        {{
-            "score": 85,
-            "resumo": "Explicação curta.",
-            "perguntas_entrevista": ["p1", "p2"],
-            "mensagem_linkedin": "abordagem curta."
-        }}
+        Retorne APENAS o JSON: {{"score": 85, "resumo": "Explicação curta.", "perguntas_entrevista": ["p1", "p2"], "mensagem_linkedin": "abordagem curta."}}
         """
         try:
             resposta = model.generate_content(prompt)
             texto_bruto = resposta.text.strip()
-            
-            # --- ESPIÃO ---
-            print(f"  🔍 IA Respondeu para '{vaga['titulo'][:20]}...': {texto_bruto}")
-            # --------------
-            
             match = re.search(r'\{.*\}', texto_bruto, re.DOTALL)
+            
             if match:
                 analise = json.loads(match.group(0))
                 vaga['match_score'] = analise.get('score', 0)
                 vaga['resumo_ia'] = analise.get('resumo', '')
                 vaga['perguntas'] = analise.get('perguntas_entrevista', [])
                 vaga['mensagem_linkedin'] = analise.get('mensagem_linkedin', '')
-                vagas_pontuadas.append(vaga)
-                time.sleep(4)
             else:
-                # Se não achou JSON, força erro
-                raise ValueError("Não encontrei JSON")
+                vaga['match_score'] = 10
             
+            vagas_pontuadas.append(vaga)
+            time.sleep(4)
         except Exception as e:
-            print(f"  ❌ ERRO na IA para '{vaga['titulo'][:20]}': {e}")
+            print(f"  ❌ Erro ao processar vaga {vaga['titulo'][:10]}: {e}")
             vaga['match_score'] = 10
             vagas_pontuadas.append(vaga)
 
-    vagas_pontuadas.sort(key=lambda x: x.get('match_score', 0), reverse=True)
     return vagas_pontuadas
 
 def exibir_ranking(vagas_pontuadas: list[dict], limite: int = 15) -> None:
