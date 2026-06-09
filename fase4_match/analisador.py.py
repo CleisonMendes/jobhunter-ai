@@ -27,55 +27,85 @@ def extrair_palavras_chave(perfil: dict) -> list:
     return list(set(palavras))
 
 def calcular_match(vagas_filtradas: list[dict], perfil: dict) -> list[dict]:
-    """
-    Calcula o score de cada vaga com base nas palavras-chave do perfil.
-    """
-    print("\n[FASE 4] A calcular a pontuação de aderência (Match Score)...")
+    """Filtra as vagas básicas e usa IA para analisar contexto e gerar dossiê."""
+    print("\n[FASE 4] Triagem Híbrida e Inteligência Analítica (Match 2.0)...")
+    import os
+    import json
     
-    palavras_perfil = extrair_palavras_chave(perfil)
-    vagas_pontuadas = []
+    # 1. PRÉ-FILTRO (Evitar estouro de limite da API)
+    vagas_pre_aprovadas = []
+    termos_chave = ["antifraude", "chargeback", "fraude", "risco", "dados", "data", "python", "sql", "backoffice"]
+    termos_barrar = ["sênior", "senior", "lead", "staff", "coordenador", "gerente", "manager"]
 
     for vaga in vagas_filtradas:
-        score = 0
-        titulo_vaga = vaga.get('titulo', '').lower()
+        titulo = vaga.get('titulo', '').lower()
+        if any(termo in titulo for termo in termos_chave) and not any(termo in titulo for termo in termos_barrar):
+            vagas_pre_aprovadas.append(vaga)
+
+    if not vagas_pre_aprovadas:
+        return []
+
+    # 2. ANÁLISE IA (Match Score 2.0 e Dossiê)
+    vagas_pontuadas = []
+    api_key = os.environ.get("GEMINI_API_KEY")
+
+    if not api_key:
+        print("  ⚠️ GEMINI_API_KEY não encontrada. Abortando IA Analítica.")
+        return vagas_pre_aprovadas
+
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel('gemini-1.5-flash')
+
+    # Resumo do seu perfil para a IA ler mais rápido
+    perfil_resumido = {
+        "cargo": perfil.get("cargo_atual"),
+        "habilidades": perfil.get("habilidades"),
+        "areas": perfil.get("preferencias_vaga", {}).get("areas")
+    }
+
+    limite_analise = 10 # Limita para não estourar a API gratuita
+    print(f"  🧠 Analisando as {len(vagas_pre_aprovadas[:limite_analise])} melhores vagas com Gemini...")
+
+    for vaga in vagas_pre_aprovadas[:limite_analise]:
+        prompt = f"""
+        Você é um consultor de carreira avaliando uma vaga para o candidato.
+        Perfil do candidato: {json.dumps(perfil_resumido, ensure_ascii=False)}
+        Vaga: "{vaga['titulo']}" na empresa "{vaga['empresa']}"
+
+        Avalie a aderência de 0 a 100. Se a aderência for >= 75, crie um dossiê.
         
-        # Lógica de pontuação baseada no título
-        for palavra in palavras_perfil:
-            # Palavra exata ou parte importante do título
-            if palavra in titulo_vaga:
-                # Dá um peso maior a termos críticos
-                if palavra in ["antifraude", "chargeback", "python"]:
-                    score += 30
-                else:
-                    score += 10
-        
-        # Guarda a pontuação na própria vaga
-        vaga['match_score'] = score
-        vagas_pontuadas.append(vaga)
-        
-    # Ordena a lista: vagas com maior score ficam em primeiro lugar (reverse=True)
+        Retorne EXATAMENTE neste formato JSON:
+        {{
+            "score": 85,
+            "resumo": "Uma frase curta explicando o porquê da nota.",
+            "perguntas_entrevista": ["Pergunta técnica 1", "Pergunta comportamental 2"],
+            "mensagem_linkedin": "Uma mensagem curta de 2 linhas para o candidato abordar o recrutador dessa empresa no LinkedIn ressaltando a experiência dele."
+        }}
+        """
+        try:
+            resposta = model.generate_content(prompt)
+            texto = resposta.text.strip()
+            
+            # Limpeza do JSON
+            if texto.startswith("```"):
+                texto = texto.split("\n", 1)[1].rsplit("\n", 1)[0]
+            if texto.startswith("json"):
+                texto = texto.split("\n", 1)[1]
+
+            analise = json.loads(texto)
+            vaga['match_score'] = analise.get('score', 0)
+            vaga['resumo_ia'] = analise.get('resumo', '')
+            vaga['perguntas'] = analise.get('perguntas_entrevista', [])
+            vaga['mensagem_linkedin'] = analise.get('mensagem_linkedin', '')
+            
+            vagas_pontuadas.append(vaga)
+            time.sleep(4) # Pausa de 4s para respeitar o limite de 15 requisições por minuto do Google
+            
+        except Exception as e:
+            print(f"  ❌ Erro de IA na vaga {vaga['titulo']}: {e}")
+            vaga['match_score'] = 10
+            vagas_pontuadas.append(vaga)
+
+    # Ordena as vagas com maior pontuação primeiro
     vagas_pontuadas.sort(key=lambda x: x.get('match_score', 0), reverse=True)
-    
     return vagas_pontuadas
-
-def exibir_ranking(vagas_pontuadas: list[dict], limite: int = 10) -> None:
-    """Mostra o Top X de vagas com melhor Match Score."""
-    print(f"\n{'='*60}")
-    print(f"  🏆 TOP {limite} VAGAS MAIS ALINHADAS COM O SEU PERFIL")
-    print(f"{'='*60}")
-    
-    # Filtra apenas vagas que tiveram alguma pontuação e limita o resultado
-    melhores_vagas = [v for v in vagas_pontuadas if v['match_score'] > 0][:limite]
-    
-    if not melhores_vagas:
-        print("\n❌ Nenhuma vaga obteve pontuação alta o suficiente nesta execução.")
-        return
-
-    for numero, vaga in enumerate(melhores_vagas, start=1):
-        print(f"\n[{numero:02d}] {vaga['titulo']}")
-        print(f"     Match Score : {vaga['match_score']} pts ⭐")
-        print(f"     Empresa     : {vaga['empresa']}")
-        print(f"     Local       : {vaga['local']}")
-        print(f"     Fonte       : {vaga['fonte']}")
-        print(f"     Link        : {vaga['link']}")
-        print(f"     {'-'*52}")
