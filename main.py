@@ -51,7 +51,7 @@ def calcular_match(vagas_filtradas: list[dict], perfil: dict) -> list[dict]:
     print("\n[FASE 4] Triagem Híbrida e Inteligência Analítica (Match 2.0)...")
     import os
     import json
-    import re  # Importação crucial para limpar o JSON
+    import re
     
     vagas_pre_aprovadas = []
     termos_chave = ["antifraude", "chargeback", "fraude", "risco", "dados", "data", "python", "sql", "backoffice"]
@@ -82,7 +82,8 @@ def calcular_match(vagas_filtradas: list[dict], perfil: dict) -> list[dict]:
         Você é um consultor. Analise esta vaga para o candidato: {json.dumps(perfil_resumido, ensure_ascii=False)}
         Vaga: "{vaga['titulo']}" na empresa "{vaga['empresa']}"
 
-        Retorne APENAS um objeto JSON válido (começando com {{ e terminando com }}). Não escreva nada antes nem depois.
+        Avalie a aderência de 0 a 100.
+        Retorne APENAS um objeto JSON válido (começando com {{ e terminando com }}):
         {{
             "score": 85,
             "resumo": "Explicação curta.",
@@ -94,7 +95,10 @@ def calcular_match(vagas_filtradas: list[dict], perfil: dict) -> list[dict]:
             resposta = model.generate_content(prompt)
             texto_bruto = resposta.text.strip()
             
-            # 🚀 O PULO DO GATO: Extrai o JSON de dentro do texto, ignorando conversa
+            # --- ESPIÃO ---
+            print(f"  🔍 IA Respondeu para '{vaga['titulo'][:20]}...': {texto_bruto}")
+            # --------------
+            
             match = re.search(r'\{.*\}', texto_bruto, re.DOTALL)
             if match:
                 analise = json.loads(match.group(0))
@@ -105,7 +109,8 @@ def calcular_match(vagas_filtradas: list[dict], perfil: dict) -> list[dict]:
                 vagas_pontuadas.append(vaga)
                 time.sleep(4)
             else:
-                raise ValueError(f"Não encontrei JSON na resposta: {texto_bruto}")
+                # Se não achou JSON, força erro
+                raise ValueError("Não encontrei JSON")
             
         except Exception as e:
             print(f"  ❌ ERRO na IA para '{vaga['titulo'][:20]}': {e}")
