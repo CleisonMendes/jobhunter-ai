@@ -241,7 +241,7 @@ def filtrar_vagas(vagas: list[dict]) -> list[dict]:
 
         # Calcula bônus de recência
         bonus, label_recencia = calcular_bonus_recencia(vaga.get('data_pub'))
-
+        print(f"  🔍 '{vaga['titulo'][:15]}...' | Data: {vaga.get('data_pub')} | Label: {label_recencia} | Bônus: {bonus}")
         if bonus == -999:
             desc_antigas += 1
             continue  # descarta vaga muito antiga
