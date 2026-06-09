@@ -273,46 +273,73 @@ def enviar_para_telegram(vagas_pontuadas: list[dict], limite: int = 15) -> None:
         print("\n[FASE 5] Nenhuma vaga para enviar.")
         return
 
-    print("\n[FASE 5] Verificando vagas inéditas no Banco de Dados...")
+    print("\n[FASE 5] Salvando vagas enriquecidas no Banco de Dados...")
 
-    conn   = sqlite3.connect("vagas_enviadas.db")
+    conn = sqlite3.connect("vagas_enviadas.db")
     cursor = conn.cursor()
+    
+    # 1. Criação da tabela com as colunas completas
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS enviadas (
             link TEXT PRIMARY KEY,
-            data_envio TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            data_envio TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            titulo TEXT,
+            empresa TEXT,
+            fonte TEXT,
+            local TEXT,
+            match_score INTEGER
         )
     """)
     conn.commit()
 
-    TOKEN   = os.environ.get("TELEGRAM_TOKEN")
+    TOKEN = os.environ.get("TELEGRAM_TOKEN")
     CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
     vagas_ineditas = []
+    
+    # 2. Verifica inéditas e prepara inserção
     for vaga in vagas_pontuadas:
         cursor.execute("SELECT 1 FROM enviadas WHERE link = ?", (vaga['link'],))
         if cursor.fetchone() is None:
-            vagas_ineditas.append(vaga)
+            # Tenta salvar no banco
+            try:
+                cursor.execute("""
+                    INSERT INTO enviadas (link, titulo, empresa, fonte, local, match_score) 
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (
+                    vaga['link'], 
+                    vaga.get('titulo', '—'), 
+                    vaga.get('empresa', '—'), 
+                    vaga.get('fonte', '—'), 
+                    vaga.get('local', '—'), 
+                    vaga.get('match_score', 0)
+                ))
+                vagas_ineditas.append(vaga)
+            except Exception as e:
+                print(f"⚠️ Erro ao salvar vaga no banco: {e}")
+            
             if len(vagas_ineditas) >= limite:
                 break
 
+    conn.commit()
+    conn.close()
+
+    # 3. Envio para o Telegram (apenas se houver inéditas)
     if not vagas_ineditas:
         print("  🤫 Nenhuma vaga nova nesta rodada. Nada foi enviado.")
-        conn.close()
         return
 
     print(f"  🔥 {len(vagas_ineditas)} vaga(s) inédita(s)! Enviando...")
 
     mensagem = f"🚀 <b>NOVAS VAGAS INÉDITAS ({len(vagas_ineditas)})</b> 🚀\n\n"
-
     for numero, vaga in enumerate(vagas_ineditas, start=1):
         link    = vaga['link']
-        titulo  = vaga['titulo'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-        empresa = vaga['empresa'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+        titulo  = str(vaga.get('titulo', '—')).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+        empresa = str(vaga.get('empresa', '—')).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
         score   = vaga.get('match_score', 0)
 
         mensagem += f"<b>[{numero:02d}] {titulo}</b>\n"
-        mensagem += f"🏢 {empresa} | 📍 {vaga['local']}\n"
+        mensagem += f"🏢 {empresa} | 📍 {vaga.get('local', '—')}\n"
         mensagem += f"⭐ <b>Match Score: {score}%</b>\n"
 
         if vaga.get('resumo_ia'):
@@ -325,29 +352,16 @@ def enviar_para_telegram(vagas_pontuadas: list[dict], limite: int = 15) -> None:
             for p in vaga['perguntas']:
                 mensagem += f"❓ {p}\n"
             mensagem += f"💬 <b>Abordagem LinkedIn:</b>\n<i>{vaga['mensagem_linkedin']}</i>\n"
-
         mensagem += "───────────────────\n\n"
-        cursor.execute("INSERT OR IGNORE INTO enviadas (link) VALUES (?)", (link,))
 
-    conn.commit()
-    conn.close()
-
-    url     = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    payload = {
-        "chat_id": CHAT_ID,
-        "text": mensagem,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True
-    }
-
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    payload = {"chat_id": CHAT_ID, "text": mensagem, "parse_mode": "HTML", "disable_web_page_preview": True}
+    
     try:
-        resposta = requests.post(url, json=payload)
-        if resposta.status_code == 200:
-            print("  📱 ✅ Enviado com sucesso!")
-        else:
-            print(f"  ❌ Erro Telegram: {resposta.text}")
+        requests.post(url, json=payload)
+        print("  📱 ✅ Enviado com sucesso!")
     except Exception as e:
-        print(f"  ❌ Erro de conexão: {e}")
+        print(f"  ❌ Erro de conexão com Telegram: {e}")
 
 
 # ====================================================================
