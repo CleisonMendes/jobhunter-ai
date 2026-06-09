@@ -118,7 +118,7 @@ def salvar_descartadas(todas_vagas: list[dict], vagas_filtradas: list[dict]) -> 
     for vaga in descartadas:
         link   = vaga.get('link', '')
         titulo = vaga.get('titulo', '—')
-        local  = vaga.get('local', '').lower()
+        local = (vaga.get('local') or '').lower()
 
         # Tenta inferir o motivo do descarte
         if any(pais in local for pais in ['united', 'mexico', 'colombia', 'argentina', 'usa', 'us', 'uk']):
