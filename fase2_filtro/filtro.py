@@ -46,6 +46,10 @@ PALAVRAS_CHAVE = {
         "disputas",
         "contestação",
         "contestacao",
+      "automação de processos",
+      "analista de negocios",
+      "melhoria continua",
+      "analista de RPA",
     ],
     "media": [
         "analista de dados",
@@ -54,7 +58,6 @@ PALAVRAS_CHAVE = {
         "analista back office",
         "backoffice financeiro",
         "back office financeiro",
-        "automação de processos",
         "process automation",
         "analista financeiro",
         "analista de operações",
