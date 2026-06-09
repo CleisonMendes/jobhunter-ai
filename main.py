@@ -104,7 +104,6 @@ def buscar_todas_vagas_paralelo() -> list:
             return []
 
     with Timer("Buscas paralelas (Gupy + Indeed + LinkedIn)"):
-        # 8 workers: suficiente para todas as tarefas sem sobrecarregar
         with ThreadPoolExecutor(max_workers=8) as executor:
             futuros = {executor.submit(executar_tarefa, t): t for t in tarefas}
             for futuro in as_completed(futuros):
@@ -129,6 +128,15 @@ def buscar_todas_vagas_paralelo() -> list:
 # ── FASE 4: MATCH SCORE ──────────────────────────────────────────────
 # ====================================================================
 
+# Lista de modelos em ordem de preferência — tenta o primeiro,
+# se falhar (cota, erro etc.) cai automaticamente para o próximo
+MODELOS_FALLBACK = [
+    'gemini-2.0-flash-lite',
+    'gemini-2.5-flash',
+    'gemini-3.5-flash',
+]
+
+
 def calcular_match(vagas_filtradas: list[dict], perfil: dict) -> list[dict]:
     print("\n[FASE 4] Triagem Híbrida e Inteligência Analítica (Match 2.0)...")
 
@@ -146,7 +154,6 @@ def calcular_match(vagas_filtradas: list[dict], perfil: dict) -> list[dict]:
 
     api_key = os.environ.get("GEMINI_API_KEY")
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-3.5-flash')  # ← modelo atualizado
 
     perfil_resumido = {
         "cargo": perfil.get("cargo_atual"),
@@ -171,25 +178,32 @@ def calcular_match(vagas_filtradas: list[dict], perfil: dict) -> list[dict]:
             "mensagem_linkedin": "abordagem curta."
         }}
         """
-        try:
-            resposta = model.generate_content(prompt)
-            texto_bruto = resposta.text.strip()
-            match = re.search(r'\{.*\}', texto_bruto, re.DOTALL)
-            if match:
-                analise = json.loads(match.group(0))
-                vaga['match_score']        = analise.get('score', 0)
-                vaga['resumo_ia']          = analise.get('resumo', '')
-                vaga['perguntas']          = analise.get('perguntas_entrevista', [])
-                vaga['mensagem_linkedin']  = analise.get('mensagem_linkedin', '')
-            else:
-                raise ValueError("JSON não encontrado na resposta")
-        except Exception as e:
-            print(f"  ❌ ERRO na IA para '{vaga['titulo'][:30]}': {e}")
-            vaga['match_score'] = 10
+        for nome_modelo in MODELOS_FALLBACK:
+            try:
+                model = genai.GenerativeModel(nome_modelo)
+                resposta = model.generate_content(prompt)
+                texto_bruto = resposta.text.strip()
+                match = re.search(r'\{.*\}', texto_bruto, re.DOTALL)
+                if match:
+                    analise = json.loads(match.group(0))
+                    vaga['match_score']       = analise.get('score', 0)
+                    vaga['resumo_ia']         = analise.get('resumo', '')
+                    vaga['perguntas']         = analise.get('perguntas_entrevista', [])
+                    vaga['mensagem_linkedin'] = analise.get('mensagem_linkedin', '')
+                    print(f"  ✅ '{vaga['titulo'][:30]}' analisado com {nome_modelo}")
+                    return vaga
+                else:
+                    raise ValueError("JSON não encontrado na resposta")
+            except Exception as e:
+                print(f"  ⚠️  {nome_modelo} falhou para '{vaga['titulo'][:25]}': {e}")
+                continue  # tenta o próximo modelo
+
+        # Todos os modelos falharam
+        print(f"  ❌ Todos os modelos falharam para '{vaga['titulo'][:30]}'")
+        vaga['match_score'] = 10
         return vaga
 
     with Timer("Análise IA (Gemini)"):
-        # Paralelo com 3 workers — respeita rate limit sem sleep fixo
         with ThreadPoolExecutor(max_workers=3) as executor:
             futuros = [executor.submit(analisar_vaga, v) for v in vagas_pre_aprovadas[:limite_analise]]
             for futuro in as_completed(futuros):
@@ -326,7 +340,7 @@ def main():
     perfil = carregar_perfil()
     exibir_perfil(perfil)
 
-    # Fase 1: Busca (agora paralela)
+    # Fase 1: Busca (paralela)
     with Timer("FASE 1 — Busca total"):
         todas_vagas = buscar_todas_vagas_paralelo()
 
