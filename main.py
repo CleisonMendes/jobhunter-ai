@@ -122,7 +122,13 @@ def calcular_match(vagas_filtradas: list[dict], perfil: dict) -> list[dict]:
             time.sleep(4) 
             
         except Exception as e:
-            print(f"  ❌ Erro de IA na vaga {vaga['titulo']}: {e}")
+            # Captura o erro real e imprime no Log para a gente ver
+            print(f"  ❌ Falha crítica na IA para a vaga '{vaga.get('titulo')}':")
+            print(f"  ➡️ Erro reportado: {e}")
+            if 'resposta' in locals():
+                print(f"  ➡️ Texto bruto recebido da IA: {resposta.text}")
+            
+            # Mantemos o score 10 apenas para o sistema não travar, mas agora saberemos o motivo
             vaga['match_score'] = 10
             vagas_pontuadas.append(vaga)
 
