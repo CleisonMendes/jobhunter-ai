@@ -186,7 +186,6 @@ def buscar_todas_vagas_paralelo() -> list:
 # ====================================================================
 
 MODELOS_FALLBACK = [
-    'gemini-2.0-flash-lite',
     'gemini-2.5-flash',
     'gemini-3.5-flash',
 ]
@@ -323,6 +322,10 @@ def enviar_para_telegram(vagas_pontuadas: list[dict], limite: int = 15) -> None:
         print("\n[FASE 5] Nenhuma vaga para enviar.")
         return
 
+    # ── PLANILHA: antes do filtro de inéditas do banco (a própria planilha
+    #    evita duplicatas pelo link), para não depender do que já foi ao Telegram
+    registrar_na_planilha(vagas_pontuadas)
+
     print("\n[FASE 5] Salvando vagas enriquecidas no Banco de Dados...")
 
     conn   = sqlite3.connect("vagas_enviadas.db")
@@ -380,9 +383,6 @@ def enviar_para_telegram(vagas_pontuadas: list[dict], limite: int = 15) -> None:
     if not vagas_ineditas:
         print("  🤫 Nenhuma vaga nova nesta rodada. Nada foi enviado.")
         return
-
-    # ── PLANILHA: registra as inéditas aderentes no Google Sheets ────
-    registrar_na_planilha(vagas_ineditas)
 
     print(f"  🔥 {len(vagas_ineditas)} vaga(s) inédita(s)! Enviando...")
 
