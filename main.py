@@ -1,8 +1,9 @@
 """
 ==============================================
-  JOBHUNTER AI — main.py (OTIMIZADO)
+  RADAR DE VAGAS — main.py (OTIMIZADO)
   Bloco 1: Deduplicação + DB Enriquecido + Descartadas
   Bloco 3: Alerta de Urgência + Relatório Semanal
+  Bloco 4: Planilha Gestão de Vagas (Google Sheets)
 ==============================================
 """
 
@@ -22,10 +23,11 @@ sys.path.append(str(Path(__file__).parent / "fase1_mvp"))
 sys.path.append(str(Path(__file__).parent / "fase2_filtro"))
 sys.path.append(str(Path(__file__).parent / "fase3_perfil"))
 
-from filtro     import filtrar_vagas, exibir_resultado_filtro
-from perfil     import carregar_perfil, exibir_perfil
-from buscador   import buscar_vagas_gupy, buscar_todas_greenhouse, buscar_vagas_indeed, buscar_linkedin_rss, buscar_linkedin_posts
-from leitor_pdf import checar_e_atualizar_perfil
+from filtro      import filtrar_vagas, exibir_resultado_filtro
+from perfil      import carregar_perfil, exibir_perfil
+from buscador    import buscar_todas_greenhouse, buscar_linkedin_posts
+from integracoes import buscar_vagas_gupy, registrar_na_planilha
+from leitor_pdf  import checar_e_atualizar_perfil
 
 
 # ====================================================================
@@ -148,25 +150,19 @@ def buscar_todas_vagas_paralelo() -> list:
 
     for termo in ["analista antifraude","analista chargeback","prevenção de fraudes","analista financeiro","backoffice financeiro","analista de dados"]:
         tarefas.append(("gupy", termo))
-    for termo in ["analista antifraude","analista chargeback","prevenção de fraudes"]:
-        tarefas.append(("indeed", termo))
-    for termo in ["analista antifraude","analista chargeback","prevenção de fraudes"]:
-        tarefas.append(("linkedin_rss", termo))
     for termo in ["antifraude","chargeback"]:
         tarefas.append(("linkedin_posts", termo))
 
     def executar_tarefa(args):
         fonte, termo = args
         try:
-            if fonte == "gupy":          return buscar_vagas_gupy(termo)
-            elif fonte == "indeed":      return buscar_vagas_indeed(termo, "Brasil")
-            elif fonte == "linkedin_rss":  return buscar_linkedin_rss(termo)
+            if fonte == "gupy":             return buscar_vagas_gupy(termo)
             elif fonte == "linkedin_posts": return buscar_linkedin_posts(termo)
         except Exception as e:
             print(f"  ⚠️  Erro em {fonte} ({termo}): {e}")
             return []
 
-    with Timer("Buscas paralelas (Gupy + Indeed + LinkedIn)"):
+    with Timer("Buscas paralelas (Gupy + LinkedIn)"):
         with ThreadPoolExecutor(max_workers=8) as executor:
             futuros = {executor.submit(executar_tarefa, t): t for t in tarefas}
             for futuro in as_completed(futuros):
@@ -319,7 +315,7 @@ def exibir_ranking(vagas_pontuadas: list[dict], limite: int = 15) -> None:
 
 
 # ====================================================================
-# ── FASE 5: TELEGRAM + BANCO ENRIQUECIDO ─────────────────────────────
+# ── FASE 5: TELEGRAM + BANCO ENRIQUECIDO + PLANILHA ──────────────────
 # ====================================================================
 
 def enviar_para_telegram(vagas_pontuadas: list[dict], limite: int = 15) -> None:
@@ -385,6 +381,9 @@ def enviar_para_telegram(vagas_pontuadas: list[dict], limite: int = 15) -> None:
         print("  🤫 Nenhuma vaga nova nesta rodada. Nada foi enviado.")
         return
 
+    # ── PLANILHA: registra as inéditas aderentes no Google Sheets ────
+    registrar_na_planilha(vagas_ineditas)
+
     print(f"  🔥 {len(vagas_ineditas)} vaga(s) inédita(s)! Enviando...")
 
     # ── ITEM 7: Alerta de urgência separado para vagas ouro ──────────
@@ -418,10 +417,13 @@ def enviar_para_telegram(vagas_pontuadas: list[dict], limite: int = 15) -> None:
 
 
 def _enviar_mensagem_telegram(mensagem: str, token: str, chat_id: str) -> None:
+    if not token or not chat_id:
+        print("  ⚠️  Telegram não configurado.")
+        return
     url     = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {"chat_id": chat_id, "text": mensagem, "parse_mode": "HTML", "disable_web_page_preview": True}
     try:
-        requests.post(url, json=payload)
+        requests.post(url, json=payload, timeout=20)
     except Exception as e:
         print(f"  ❌ Erro de conexão com Telegram: {e}")
 
@@ -547,8 +549,8 @@ def main():
     inicio_total = time.time()
 
     print("\n" + "=" * 60)
-    print("          🤖 JOBHUNTER AI — Sistema Completo")
-    print("     Gupy · Greenhouse · Indeed · LinkedIn · PDF Reader")
+    print("          🤖 RADAR DE VAGAS — Sistema Completo")
+    print("     Gupy · Greenhouse · LinkedIn · PDF Reader · Google Sheets")
     print("=" * 60)
 
     # Fase 3: Perfil
@@ -590,8 +592,8 @@ def main():
         vagas_com_score = calcular_match(vagas_filtradas, perfil)
         exibir_ranking(vagas_com_score, limite=15)
 
-    # Fase 5: Telegram + banco + alerta urgência
-    with Timer("FASE 5 — Telegram"):
+    # Fase 5: Telegram + banco + alerta urgência + planilha
+    with Timer("FASE 5 — Telegram + Planilha"):
         enviar_para_telegram(vagas_com_score, limite=15)
 
     # Resumo final
