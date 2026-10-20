@@ -8,3 +8,5 @@ pypdf
 google-generativeai>=0.8.0
 streamlit
 pandas
+gspread
+google-auth
