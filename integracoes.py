@@ -22,16 +22,17 @@ import requests
 # ====================================================================
 
 def buscar_vagas_gupy(termo: str, limite: int = 20) -> list[dict]:
-    """O parâmetro agora é 'name' (antes 'jobName') e o caminho é /api/job."""
+    """Endpoint público do portal.gupy.io (o domínio portal.api.gupy.io não responde mais)."""
     print(f"\n🔍 [Gupy] Buscando: '{termo}'...")
-    url = "https://portal.api.gupy.io/api/job"
-    params = {"name": termo, "limit": limite, "offset": 0}
+    url = "https://employability-portal.gupy.io/api/v1/jobs"
+    params = {"jobName": termo, "limit": limite, "offset": 0}
     headers = {"User-Agent": "Mozilla/5.0"}
 
     try:
         resp = requests.get(url, params=params, headers=headers, timeout=20)
         resp.raise_for_status()
-        itens = resp.json().get("data", [])
+        corpo = resp.json()
+        itens = corpo.get("data") or corpo.get("results") or []
     except Exception as e:
         print(f"   ⚠️  Erro Gupy: {e}")
         return []
@@ -45,7 +46,7 @@ def buscar_vagas_gupy(termo: str, limite: int = 20) -> list[dict]:
             "empresa": item.get("careerPageName") or item.get("companyName", ""),
             "local":   "Remoto" if remoto else (cidade_estado or "Brasil"),
             "fonte":   "Gupy",
-            "link":    item.get("jobUrl", ""),
+            "link":    item.get("applyUrl") or item.get("jobUrl", ""),
         })
     print(f"   ✅ {len(vagas)} vaga(s) encontrada(s)")
     return vagas
