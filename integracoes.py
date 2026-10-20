@@ -107,8 +107,8 @@ def _linha_planilha(vaga: dict) -> list:
 
 
 def _abrir_aba():
-    cred = os.environ.get("GOOGLE_CREDENTIALS")
-    sheet_id = os.environ.get("SHEET_ID")
+    cred = (os.environ.get("GOOGLE_CREDENTIALS") or "").strip()
+    sheet_id = (os.environ.get("SHEET_ID") or "").strip()
     if not cred or not sheet_id:
         return None
     import gspread
@@ -117,7 +117,15 @@ def _abrir_aba():
     escopos = ["https://www.googleapis.com/auth/spreadsheets"]
     creds = Credentials.from_service_account_info(json.loads(cred), scopes=escopos)
     gc = gspread.authorize(creds)
-    return gc.open_by_key(sheet_id).worksheet(os.environ.get("SHEET_ABA", "Vagas"))
+    return gc.open_by_key(sheet_id).worksheet(os.environ.get("SHEET_ABA", "Vagas").strip())
+
+
+def _email_conta_servico() -> str:
+    """E-mail da conta de serviço (não é segredo) para facilitar a conferência do compartilhamento."""
+    try:
+        return json.loads(os.environ.get("GOOGLE_CREDENTIALS", "")).get("client_email", "")
+    except Exception:
+        return ""
 
 
 def registrar_na_planilha(vagas: list[dict]) -> None:
@@ -128,7 +136,11 @@ def registrar_na_planilha(vagas: list[dict]) -> None:
     try:
         aba = _abrir_aba()
     except Exception as e:
-        print(f"  ❌ Não foi possível abrir a planilha: {e}")
+        print(f"  ❌ Não foi possível abrir a planilha ({type(e).__name__}): {e!r}")
+        email = _email_conta_servico()
+        if email:
+            print(f"     → Compartilhe a planilha como Editor com: {email}")
+        print("     → Confira também se o SHEET_ID está correto e se a aba se chama 'Vagas'.")
         return
     if aba is None:
         print("  ⚠️  GOOGLE_CREDENTIALS / SHEET_ID não definidos. Planilha ignorada.")
