@@ -14,8 +14,10 @@ Se GOOGLE_CREDENTIALS ou SHEET_ID não existirem, a planilha é simplesmente ign
 import os
 import re
 import json
+import sqlite3
 import unicodedata
 import requests
+from datetime import datetime, timezone
 
 
 # ====================================================================
@@ -48,9 +50,139 @@ def buscar_vagas_gupy(termo: str, limite: int = 20) -> list[dict]:
             "local":   "Remoto" if remoto else (cidade_estado or "Brasil"),
             "fonte":   "Gupy",
             "link":    item.get("applyUrl") or item.get("jobUrl", ""),
+            "data_publicacao": item.get("publishedDate", ""),
+            "data_pub": _parse_data(item.get("publishedDate")),  # o filtro.py lê este campo
         })
     print(f"   ✅ {len(vagas)} vaga(s) encontrada(s)")
     return vagas
+
+
+# ====================================================================
+# ── RECÊNCIA: só vagas recentes, com prioridade para os últimos 7 dias
+# ====================================================================
+
+DIAS_MAX = int(os.environ.get("DIAS_MAX_VAGA", "30"))              # descarta acima disso
+DIAS_PRIORIDADE = int(os.environ.get("DIAS_PRIORIDADE_VAGA", "7"))  # prioridade até aqui
+
+CHAVES_DATA = ["data_pub", "data_publicacao", "data", "date", "data_postagem", "published_at",
+               "publishedDate", "first_published", "updated_at", "created_at"]
+
+
+def _parse_data(valor):
+    """Aceita ISO, dd/mm/aaaa e timestamps (segundos ou milissegundos)."""
+    if valor in (None, ""):
+        return None
+    if isinstance(valor, datetime):
+        return valor if valor.tzinfo else valor.replace(tzinfo=timezone.utc)
+    try:
+        if isinstance(valor, (int, float)):
+            seg = valor / 1000 if valor > 1e11 else valor
+            return datetime.fromtimestamp(seg, tz=timezone.utc)
+        txt = str(valor).strip()
+        if txt.isdigit():
+            return _parse_data(int(txt))
+        d = None
+        try:
+            d = datetime.fromisoformat(txt.replace("Z", "+00:00"))
+        except ValueError:
+            for fmt in ("%d/%m/%Y", "%d/%m/%y", "%Y/%m/%d"):
+                try:
+                    d = datetime.strptime(txt[:10], fmt)
+                    break
+                except ValueError:
+                    pass
+        if d is None:
+            return None
+        return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
+def _data_da_vaga(vaga: dict):
+    for chave in CHAVES_DATA:
+        d = _parse_data(vaga.get(chave))
+        if d:
+            return d
+    return None
+
+
+def _primeira_vez_vistas(links: list[str], agora: datetime, db: str) -> dict:
+    """Para vagas SEM data: guarda quando o robô viu o link pela primeira vez.
+    Na primeira execução (tabela vazia) tudo vira 'linha de base' (considerado antigo),
+    então só entram vagas que aparecerem DEPOIS de começar o monitoramento."""
+    conn = sqlite3.connect(db)
+    cur = conn.cursor()
+    cur.execute("CREATE TABLE IF NOT EXISTS vistas (link TEXT PRIMARY KEY, primeira_vez TEXT)")
+    vazia = cur.execute("SELECT COUNT(*) FROM vistas").fetchone()[0] == 0
+    base = datetime(2000, 1, 1, tzinfo=timezone.utc).isoformat()
+    resultado = {}
+    for link in links:
+        linha = cur.execute("SELECT primeira_vez FROM vistas WHERE link = ?", (link,)).fetchone()
+        if linha is None:
+            quando = base if vazia else agora.isoformat()
+            cur.execute("INSERT OR IGNORE INTO vistas (link, primeira_vez) VALUES (?, ?)", (link, quando))
+        else:
+            quando = linha[0]
+        resultado[link] = _parse_data(quando)
+    conn.commit()
+    conn.close()
+    return resultado
+
+
+def filtrar_recentes(vagas: list[dict], db: str = "vagas_enviadas.db") -> list[dict]:
+    """Mantém vagas com até DIAS_MAX dias e marca 'recente' as de até DIAS_PRIORIDADE dias.
+    Campos adicionados: dias_desde_publicacao, recente, data_origem ('publicada' ou 'detectada')."""
+    print(f"\n[RECÊNCIA] Mantendo vagas de até {DIAS_MAX} dias (prioridade: {DIAS_PRIORIDADE} dias)...")
+    agora = datetime.now(timezone.utc)
+
+    mantidas, antigas, com_data, sem_data = [], 0, 0, []
+    for v in vagas:
+        d = _data_da_vaga(v)
+        if d is None:
+            sem_data.append(v)
+            continue
+        com_data += 1
+        dias = max(0, (agora - d).days)
+        if dias > DIAS_MAX:
+            antigas += 1
+            continue
+        v["dias_desde_publicacao"] = dias
+        v["recente"] = dias <= DIAS_PRIORIDADE
+        v["data_origem"] = "publicada"
+        mantidas.append(v)
+
+    novas_sem_data = 0
+    links = [v["link"] for v in sem_data if v.get("link")]
+    vistas = {}
+    if links:
+        try:
+            vistas = _primeira_vez_vistas(links, agora, db)
+        except Exception as e:
+            print(f"  ⚠️  Não foi possível controlar vagas sem data ({e}). Mantendo todas.")
+            vistas = None
+
+    for v in sem_data:
+        if vistas is None or not v.get("link"):
+            v["recente"] = False
+            v["data_origem"] = "sem_data"
+            mantidas.append(v)
+            continue
+        d = vistas.get(v["link"])
+        dias = max(0, (agora - d).days) if d else 9999
+        if dias > DIAS_MAX:
+            antigas += 1
+            continue
+        v["dias_desde_publicacao"] = dias
+        v["recente"] = dias <= DIAS_PRIORIDADE
+        v["data_origem"] = "detectada"
+        v["data_pub"] = d  # assim o filtro.py também dá o bônus de recência
+        novas_sem_data += 1
+        mantidas.append(v)
+
+    prioritarias = sum(1 for v in mantidas if v.get("recente"))
+    print(f"  📅 {com_data} com data | {len(sem_data)} sem data ({novas_sem_data} novas desde o início do monitoramento)")
+    print(f"  🗑️  {antigas} descartada(s) por serem antigas | ✅ {len(mantidas)} mantida(s), {prioritarias} com prioridade")
+    return mantidas
 
 
 # ====================================================================
