@@ -5,16 +5,17 @@
 ==============================================
 Fontes suportadas:
   - Gupy        (API pública — tem data)
-  - Greenhouse  (API pública — sem data)
+  - Greenhouse  (API pública — first_published / updated_at)
   - Indeed      (scraping — sem data confiável)
   - LinkedIn    (RSS — tem pubDate)
-  - LinkedIn    (Posts via DuckDuckGo — sem data)
+  - LinkedIn    (Posts via DuckDuckGo — data extraída do ID do post)
 """
 
+import re
 import requests
 import urllib.parse
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from bs4 import BeautifulSoup
 
 
@@ -51,6 +52,7 @@ def _parse_data(texto: str | None) -> datetime | None:
         "%Y-%m-%dT%H:%M:%S.%fZ",
         "%Y-%m-%dT%H:%M:%SZ",
         "%Y-%m-%dT%H:%M:%S%z",
+        "%Y-%m-%dT%H:%M:%S.%f%z",
         "%Y-%m-%d",
         "%a, %d %b %Y %H:%M:%S %z",   # RFC 2822 — usado no RSS
         "%a, %d %b %Y %H:%M:%S GMT",
@@ -63,6 +65,26 @@ def _parse_data(texto: str | None) -> datetime | None:
             return dt
         except ValueError:
             continue
+    return None
+
+
+def _data_do_post(link: str) -> datetime | None:
+    """
+    Posts do LinkedIn trazem um ID numérico na URL (ex.: ...-activity-7123456789012345678-abcd).
+    Os 41 bits mais altos desse ID são o horário da postagem em milissegundos,
+    então a data sai de: id >> 22. Retorna None se o link não tiver esse ID
+    ou se a data calculada não fizer sentido.
+    """
+    achado = re.search(r"(?:activity|ugcPost|share)[-:](\d{18,20})", link or "")
+    if not achado:
+        return None
+    try:
+        dt = datetime.fromtimestamp((int(achado.group(1)) >> 22) / 1000, tz=timezone.utc)
+    except (ValueError, OverflowError, OSError):
+        return None
+    agora = datetime.now(timezone.utc)
+    if datetime(2015, 1, 1, tzinfo=timezone.utc) <= dt <= agora + timedelta(days=1):
+        return dt
     return None
 
 
@@ -126,15 +148,18 @@ def buscar_vagas_greenhouse(empresa_nome: str, empresa_slug: str) -> list[dict]:
             link   = vaga.get("absolute_url", "")
             local  = vaga.get("location", {}).get("name", "Não informado")
 
-            # ── DATA: Greenhouse não expõe data na API pública ────────
-            # Marcamos None — o filtro vai tratar com tolerância máxima
+            # ── DATA: a lista do Greenhouse traz 'updated_at' (última edição da vaga)
+            # e, em boards mais novos, 'first_published' (data da publicação).
+            # Preferimos a publicação; se não houver, usamos a última atualização.
+            data_pub = _parse_data(vaga.get("first_published") or vaga.get("updated_at"))
+
             vagas_encontradas.append({
                 "titulo":   titulo,
                 "empresa":  empresa_nome,
                 "local":    local,
                 "link":     link,
                 "fonte":    "Greenhouse",
-                "data_pub": None,
+                "data_pub": data_pub,
             })
 
         print(f"   ✅ {len(vagas_encontradas)} vaga(s) encontrada(s)")
@@ -295,7 +320,8 @@ def buscar_linkedin_posts(termo: str) -> list[dict]:
                             'local':    'Brasil (Verificar post)',
                             'link':     link,
                             'fonte':    'LinkedIn Posts',
-                            'data_pub': None,  # DuckDuckGo não retorna data
+                            # DATA: o DuckDuckGo não informa, mas o ID do post na URL carrega o horário
+                            'data_pub': _data_do_post(link),
                         })
     except Exception as e:
         print(f"  ❌ Erro ao buscar posts no DuckDuckGo: {e}")
