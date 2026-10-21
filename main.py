@@ -27,7 +27,6 @@ from filtro      import filtrar_vagas, exibir_resultado_filtro
 from perfil      import carregar_perfil, exibir_perfil
 from buscador    import buscar_todas_greenhouse, buscar_linkedin_posts
 from integracoes import buscar_vagas_gupy, registrar_na_planilha, filtrar_recentes
-from leitor_pdf  import checar_e_atualizar_perfil
 
 
 # ====================================================================
@@ -586,10 +585,7 @@ def main():
 
     # Fase 3: Perfil
     print("\n[FASE 3] Carregando perfil do candidato...")
-    try:
-        checar_e_atualizar_perfil()
-    except Exception as e:
-        print(f"  ⚠️  Aviso: Erro no leitor de PDF. Detalhes: {e}")
+    # O perfil vem somente do fase3_perfil/perfil.json (o leitor de PDF não é mais usado)
 
     perfil = carregar_perfil()
     exibir_perfil(perfil)
