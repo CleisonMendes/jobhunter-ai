@@ -1,7 +1,8 @@
 """
 ==============================================
-  JOBHUNTER AI — Fase 2: Filtro Inteligente
+  RADAR DE VAGAS — Fase 2: Filtro Inteligente
   Bloco 3+: Filtro de recência + bônus de data
+  Bloco 5: Perfil em transição para tecnologia
 ==============================================
 
 Regras de recência:
@@ -10,8 +11,14 @@ Regras de recência:
   - 8–15 dias  → intermediária (+2 pts bônus)
   - 0–7 dias   → alta prioridade (+5 pts bônus)
   - sem data   → aceita sem bônus (Greenhouse, Indeed, Posts)
+
+Casamento de palavras:
+  Os termos são procurados como PALAVRA INTEIRA e sem acento
+  (assim "ios" não bloqueia "negócios" e "ui" não bloqueia "equipe").
 """
 
+import re
+import unicodedata
 from datetime import datetime, timezone
 
 # ── Configuração de recência ──────────────────────────────────────────────────
@@ -29,6 +36,7 @@ BONUS_BAIXA         = 0
 
 PALAVRAS_CHAVE = {
     "alta": [
+        # Antifraude / chargeback (experiência atual)
         "analista antifraude",
         "analista de antifraude",
         "analista chargeback",
@@ -45,11 +53,24 @@ PALAVRAS_CHAVE = {
         "fraud",
         "disputas",
         "contestação",
-        "contestacao",
-      "automação de processos",
-      "analista de negocios",
-      "melhoria continua",
-      "analista de RPA",
+        "automação de processos",
+        "analista de negocios",
+        "melhoria continua",
+        "analista de RPA",
+        # Tecnologia (transição de carreira)
+        "desenvolvedor",
+        "desenvolvedora",
+        "developer",
+        "full stack",
+        "fullstack",
+        "full-stack",
+        "javascript",
+        "node",
+        "node.js",
+        "nodejs",
+        "react",
+        "analista de sistemas",
+        "analista de automação",
     ],
     "media": [
         "analista de dados",
@@ -69,6 +90,22 @@ PALAVRAS_CHAVE = {
         "pagamentos",
         "payments",
         "automação",
+        # Tecnologia / porta de entrada
+        "qa",
+        "analista de testes",
+        "teste de software",
+        "rpa",
+        "suporte técnico",
+        "implantação",
+        "integração",
+        "api",
+        "web",
+        "front-end",
+        "frontend",
+        "back-end",
+        "backend",
+        "adquirência",
+        "meios de pagamento",
     ],
     "baixa": [
         "dados",
@@ -84,12 +121,15 @@ PALAVRAS_CHAVE = {
         "investimentos",
         "sdr",
         "qualidade",
-        "qa",
+        "tecnologia",
+        "ti",
     ]
 }
 
+# Níveis acima do alvo e áreas que não combinam com o perfil.
+# (front-end / back-end deixaram de ser bloqueados: fazem parte da transição para tech.)
 TITULOS_BLOQUEADOS = [
-    "sênior", "senior", "sr.",
+    "sênior", "senior", "sr.", "sr",
     "lead", "staff", "principal",
     "coordenador", "gerente", "manager",
     "diretor", "head", "cto", "cfo",
@@ -97,7 +137,6 @@ TITULOS_BLOQUEADOS = [
     "cientista de dados", "data scientist",
     "machine learning", "ml engineer",
     "devops", "sre", "platform engineer",
-    "front-end", "frontend", "back-end", "backend",
     "mobile", "ios", "android",
     "designer", "ux", "ui",
     "product manager", "product owner",
@@ -125,6 +164,25 @@ LOCAIS_BLOQUEADOS = [
 ]
 
 
+# ── Casamento de palavras (inteira, sem acento) ───────────────────────────────
+
+def _norm(txt: str) -> str:
+    txt = unicodedata.normalize("NFD", (txt or "").lower())
+    return "".join(c for c in txt if unicodedata.category(c) != "Mn")
+
+
+def _compilar(termos: list[str]) -> list[tuple[str, "re.Pattern"]]:
+    """Cada termo vira um regex de palavra inteira (aceita plural simples)."""
+    return [
+        (t, re.compile(rf"(?<!\w){re.escape(_norm(t))}(?:s|es)?(?!\w)"))
+        for t in termos
+    ]
+
+
+_REGEX_CHAVE = {cat: _compilar(palavras) for cat, palavras in PALAVRAS_CHAVE.items()}
+_REGEX_BLOQUEADOS = _compilar(TITULOS_BLOQUEADOS)
+
+
 # ── Funções auxiliares ────────────────────────────────────────────────────────
 
 def is_vaga_brasil(vaga: dict) -> bool:
@@ -139,8 +197,8 @@ def is_vaga_brasil(vaga: dict) -> bool:
 
 
 def is_titulo_bloqueado(titulo: str) -> bool:
-    titulo_lower = titulo.lower()
-    return any(termo in titulo_lower for termo in TITULOS_BLOQUEADOS)
+    titulo_norm = _norm(titulo)
+    return any(rx.search(titulo_norm) for _, rx in _REGEX_BLOQUEADOS)
 
 
 def calcular_bonus_recencia(data_pub) -> tuple[int, str]:
@@ -220,14 +278,14 @@ def filtrar_vagas(vagas: list[dict]) -> list[dict]:
     desc_antigas    = 0
 
     for vaga in vagas_relevantes:
-        texto = f"{vaga['titulo']} {vaga['empresa']}".lower()
+        texto = _norm(f"{vaga['titulo']} {vaga['empresa']}")
 
         pontuacao        = 0
         palavras_achadas = []
 
-        for categoria, palavras in PALAVRAS_CHAVE.items():
-            for palavra in palavras:
-                if palavra.lower() in texto:
+        for categoria, regexes in _REGEX_CHAVE.items():
+            for palavra, rx in regexes:
+                if rx.search(texto):
                     if categoria == "alta":
                         pontuacao += 3
                     elif categoria == "media":
