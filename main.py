@@ -240,12 +240,17 @@ def calcular_match(vagas_filtradas: list[dict], perfil: dict) -> list[dict]:
         Vaga: "{vaga['titulo']}" na empresa "{vaga['empresa']}"
 
         Avalie a aderência de 0 a 100.
+        Se a "vaga" for o texto de uma postagem do LinkedIn, extraia também o nome do cargo
+        (sem hashtags, emojis ou a palavra [POST]) e o nome da empresa, somente se aparecer no texto.
+        Se a empresa não aparecer, deixe vazio. Nunca invente.
         Retorne APENAS um objeto JSON válido (começando com {{ e terminando com }}):
         {{
             "score": 85,
             "resumo": "Explicação curta.",
             "perguntas_entrevista": ["p1", "p2"],
-            "mensagem_linkedin": "abordagem curta."
+            "mensagem_linkedin": "abordagem curta.",
+            "titulo_limpo": "Analista de Cobrança",
+            "empresa_citada": "Nome da Empresa ou vazio"
         }}
         """
         for nome_modelo in MODELOS_FALLBACK:
@@ -260,6 +265,8 @@ def calcular_match(vagas_filtradas: list[dict], perfil: dict) -> list[dict]:
                         vaga['resumo_ia']        = analise.get('resumo', '')
                         vaga['perguntas']        = analise.get('perguntas_entrevista', [])
                         vaga['mensagem_linkedin']= analise.get('mensagem_linkedin', '')
+                        vaga['titulo_limpo']     = analise.get('titulo_limpo', '') or ''
+                        vaga['empresa_citada']   = analise.get('empresa_citada', '') or ''
                         print(f"  ✅ '{vaga['titulo'][:30]}' analisado com {nome_modelo}")
                         return vaga
                     else:
