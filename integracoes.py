@@ -12,6 +12,7 @@ Se GOOGLE_CREDENTIALS ou SHEET_ID não existirem, a planilha é simplesmente ign
 """
 
 import os
+import re
 import json
 import unicodedata
 import requests
@@ -82,6 +83,59 @@ def _modelo(vaga: dict) -> str:
     return "Presencial"
 
 
+def _eh_post(vaga: dict) -> bool:
+    return ("post" in _normalizar(vaga.get("fonte", ""))
+            or "postagem" in _normalizar(vaga.get("empresa", "")))
+
+
+_CARGO = re.compile(
+    r"\b(analista|assistente|auxiliar|especialista|coordenador(?:a)?|gerente|consultor(?:a)?|"
+    r"desenvolvedor(?:a)?|engenheiro(?:a)?|tecnico|estagiario(?:a)?|supervisor(?:a)?)\b[^.\n|!•–-]{0,60}",
+    re.IGNORECASE,
+)
+
+
+def _limpar_texto(txt: str) -> str:
+    """Tira '[POST]', hashtags, emojis e espaços sobrando."""
+    t = re.sub(r"^\s*\[post\]\s*", "", txt or "", flags=re.IGNORECASE)
+    t = re.sub(r"#\w+", " ", t)
+    t = "".join(c for c in t if unicodedata.category(c) not in ("So", "Sk", "Cs", "Cn"))
+    return re.sub(r"\s+", " ", t).strip(" -–|:•")
+
+
+def _titulo_planilha(vaga: dict) -> str:
+    """Só o nome da vaga. Posts do LinkedIn trazem o texto da postagem, então são limpos."""
+    ia = (vaga.get("titulo_limpo") or "").strip()
+    if ia:
+        return ia[:90]
+    titulo = vaga.get("titulo", "")
+    if not _eh_post(vaga):
+        return titulo
+    limpo = _limpar_texto(titulo)
+    achado = _CARGO.search(limpo)
+    cargo = achado.group(0) if achado else limpo
+    cargo = re.split(r"\s+(?:na|no|em|para|pela|pelo|pra)\s+", cargo, maxsplit=1, flags=re.IGNORECASE)[0]
+    cargo = cargo.strip(" -–|:•")[:80]
+    letras = [c for c in cargo if c.isalpha()]
+    if letras and sum(c.isupper() for c in letras) / len(letras) > 0.8:  # caixa alta -> Título
+        cargo = cargo.title()
+    return cargo or "Vaga divulgada no LinkedIn (ver link)"
+
+
+def _empresa_planilha(vaga: dict) -> str:
+    """Nunca grava 'Postagem do LinkedIn' como empresa: usa a citada no texto ou deixa em branco."""
+    citada = (vaga.get("empresa_citada") or "").strip()
+    if citada:
+        return citada
+    empresa = vaga.get("empresa", "")
+    return "" if "postagem" in _normalizar(empresa) else empresa
+
+
+def _fonte_planilha(vaga: dict) -> str:
+    fonte = vaga.get("fonte", "Radar de Vagas")
+    return "LinkedIn" if "linkedin" in _normalizar(fonte) else fonte
+
+
 def _linha_planilha(vaga: dict) -> list:
     """14 colunas, de B a O, na ordem da planilha Gestão de Vagas."""
     try:
@@ -89,13 +143,13 @@ def _linha_planilha(vaga: dict) -> list:
     except (TypeError, ValueError):
         score = 0
     return [
-        vaga.get("titulo", ""),                    # B  Título da Vaga
+        _titulo_planilha(vaga),                    # B  Título da Vaga
         vaga.get("link", ""),                      # C  Link da vaga
-        vaga.get("empresa", ""),                   # D  Nome da Empresa
+        _empresa_planilha(vaga),                   # D  Nome da Empresa
         _aderencia(score),                         # E  Aderência Vaga
         "Prevenção a Fraude / Backoffice",         # F  Área/Ramo de atuação
         _modelo(vaga),                             # G  Modelo de Trabalho
-        vaga.get("fonte", "Radar de Vagas"),       # H  Onde encontrei essa vaga?
+        _fonte_planilha(vaga),                     # H  Onde encontrei essa vaga?
         "",                                        # I  Quando me inscrevi (preencha ao aplicar)
         "Inscrição",                               # J  Fase do processo
         "Não",                                     # K  Alguma ação é necessária?
