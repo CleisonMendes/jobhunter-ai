@@ -268,6 +268,25 @@ def _fonte_planilha(vaga: dict) -> str:
     return "LinkedIn" if "linkedin" in _normalizar(fonte) else fonte
 
 
+def _area(vaga: dict) -> str:
+    """Área/Ramo de atuação a partir do título."""
+    t = _normalizar(vaga.get("titulo", ""))
+    tem = lambda *termos: any(re.search(rf"(?<!\w){re.escape(x)}(?:s|es)?(?!\w)", t) for x in termos)
+    if tem("fraude", "antifraude", "anti-fraude", "chargeback", "fraud", "disputa", "contestacao"):
+        return "Prevenção a Fraude / Backoffice"
+    if tem("desenvolvedor", "desenvolvedora", "developer", "full stack", "fullstack", "full-stack",
+           "javascript", "react", "node", "frontend", "front-end", "backend", "back-end",
+           "sistemas", "software", "qa", "teste", "testes", "suporte tecnico"):
+        return "Tecnologia"
+    if tem("automacao", "rpa", "automation"):
+        return "Automação"
+    if tem("dados", "data", "analytics", "bi", "sql"):
+        return "Dados"
+    if tem("financeiro", "backoffice", "back office", "operacoes", "pagamento", "pagamentos", "risco", "compliance"):
+        return "Financeiro / Operações"
+    return "Tecnologia / Financeiro"
+
+
 def _linha_planilha(vaga: dict) -> list:
     """14 colunas, de B a O, na ordem da planilha Gestão de Vagas."""
     try:
@@ -279,7 +298,7 @@ def _linha_planilha(vaga: dict) -> list:
         vaga.get("link", ""),                      # C  Link da vaga
         _empresa_planilha(vaga),                   # D  Nome da Empresa
         _aderencia(score),                         # E  Aderência Vaga
-        "Prevenção a Fraude / Backoffice",         # F  Área/Ramo de atuação
+        _area(vaga),                               # F  Área/Ramo de atuação
         _modelo(vaga),                             # G  Modelo de Trabalho
         _fonte_planilha(vaga),                     # H  Onde encontrei essa vaga?
         "",                                        # I  Quando me inscrevi (preencha ao aplicar)
