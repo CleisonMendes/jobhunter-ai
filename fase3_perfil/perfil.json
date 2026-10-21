@@ -1,28 +1,56 @@
 {
   "nome": "Cleison Mendes",
-  "cargo_atual": "Analista de Chargeback Antifraude",
-  "empresa_atual": "Callink (parceiro PicPay)",
-  "experiencia_anos": 9,
+  "cargo_atual": "Analista de Chargeback",
+  "empresa_atual": "HS Prevent",
+  "experiencia_anos": 10,
+
+  "objetivo": "Transição para tecnologia: posições de Tecnologia, Automação, Dados, Desenvolvimento ou Operações, unindo a experiência em meios de pagamento, fraude e chargeback ao conhecimento em programação.",
 
   "habilidades": [
     "chargeback",
     "antifraude",
     "análise de fraude",
     "prevenção de fraudes",
-    "backoffice financeiro",
-    "python",
-    "sql",
-    "automação de processos",
-    "análise de dados",
     "disputas",
     "contestação de transações",
+    "desacordo comercial",
+    "meios de pagamento",
+    "análise de evidências",
+    "backoffice financeiro",
+    "javascript",
+    "react",
+    "node.js",
+    "express",
+    "sequelize",
+    "mysql",
+    "apis rest",
+    "desenvolvimento web",
+    "full stack",
+    "git",
+    "github",
+    "python",
+    "pandas",
+    "sql",
+    "machine learning",
+    "identificação de anomalias",
+    "automação de processos",
+    "análise de dados",
     "genai",
     "prompt engineering"
   ],
 
   "certificacoes": [
-    "Bootcamp GenAI & Dados — Bradesco / DIO",
-    "Bootcamp Automação"
+    "Formação em Desenvolvimento Web Full-Stack (720h) — Programadores do Amanhã",
+    "Bootcamp GenAI, Dados & Cyber — Bradesco / DIO",
+    "Bootcamp Automação",
+    "Java com IA — Itaú",
+    "Paradigmas da Linguagem Python"
+  ],
+
+  "projetos": [
+    "FraudShield — detecção de transações fraudulentas (Python, Pandas, Scikit-learn, Isolation Forest)",
+    "Aurora Invest CRM — CRM para assessoria de investimentos (React, Vite, Express, SQLite)",
+    "Robô de Documentos — automação de tratamento e padronização de documentos"
   ],
 
   "formacao": {
@@ -33,14 +61,20 @@
   },
 
   "idiomas": [
-    "Português (nativo)"
+    "Português (nativo)",
+    "Inglês (básico/intermediário)"
   ],
 
   "preferencias_vaga": {
     "modalidade": ["remoto", "híbrido", "presencial", "home office"],
     "areas": [
+      "desenvolvimento web",
+      "full stack",
+      "desenvolvimento de software",
+      "tecnologia",
       "antifraude",
       "chargeback",
+      "meios de pagamento",
       "análise de dados",
       "automação",
       "qa",
