@@ -208,7 +208,10 @@ def _rotulo_idade(v: dict) -> str:
 def calcular_match(vagas_filtradas: list[dict], perfil: dict) -> list[dict]:
     print("\n[FASE 4] Triagem Híbrida e Inteligência Analítica (Match 2.0)...")
 
-    termos_chave  = ["antifraude","chargeback","fraude","risco","dados","data","python","sql","backoffice"]
+    termos_chave  = ["antifraude","chargeback","fraude","risco","dados","data","python","sql","backoffice",
+                     "desenvolvedor","desenvolvedora","developer","full stack","fullstack","full-stack",
+                     "javascript","react","node","qa","teste","automação","automacao","rpa","sistemas",
+                     "suporte técnico","suporte tecnico","integração","integracao"]
     termos_barrar = ["sênior","senior","lead","staff","coordenador","gerente","manager"]
 
     vagas_pre_aprovadas = [
@@ -244,7 +247,11 @@ def calcular_match(vagas_filtradas: list[dict], perfil: dict) -> list[dict]:
     perfil_resumido = {
         "cargo":       perfil.get("cargo_atual"),
         "habilidades": perfil.get("habilidades"),
-        "areas":       perfil.get("preferencias_vaga", {}).get("areas")
+        "areas":       perfil.get("preferencias_vaga", {}).get("areas"),
+        "objetivo":    ("Transição de carreira para tecnologia (desenvolvimento web, automação, dados, QA). "
+                        "Mais de 10 anos em meios de pagamento, chargeback e antifraude; formação full-stack "
+                        "em JavaScript (Node.js, React, SQL, APIs REST) e ADS em andamento. "
+                        "Busca vagas júnior ou pleno; vagas de tecnologia e de operações de pagamentos são aderentes."),
     }
 
     vagas_pontuadas = []
