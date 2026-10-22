@@ -1,9 +1,12 @@
 """
 ==============================================
-  RADAR DE VAGAS — main.py (OTIMIZADO)
+  RADAR DE VAGAS — main.py (v2)
   Bloco 1: Deduplicação + DB Enriquecido + Descartadas
   Bloco 3: Alerta de Urgência + Relatório Semanal
   Bloco 4: Planilha Gestão de Vagas (Google Sheets)
+  v2: pula vagas já vistas, nota com descrição completa, alerta de fonte quebrada,
+      botões no Telegram + follow-up, Lever, checagem de vaga aberta
+      (a lógica da análise e do envio agora está em analise_envio.py)
 ==============================================
 """
 
@@ -27,6 +30,15 @@ from filtro      import filtrar_vagas, exibir_resultado_filtro
 from perfil      import carregar_perfil, exibir_perfil
 from buscador    import buscar_todas_greenhouse, buscar_linkedin_posts
 from integracoes import buscar_vagas_gupy, registrar_na_planilha, filtrar_recentes
+
+# ── NOVOS MÓDULOS (v2) ───────────────────────────────────────────────
+from analise_envio  import (calcular_match, exibir_ranking, enviar_para_telegram,
+                            _enviar_mensagem_telegram, _rotulo_idade, _prioridade)
+from telegram_acoes import rotinas_telegram
+from funil          import enviar_relatorio_funil
+from saude_fontes   import verificar_e_alertar
+from fontes_extra   import (buscar_todas_lever, LEVER_EMPRESAS,
+                            buscar_todas_programathor, PROGRAMATHOR_ATIVO)
 
 
 # ====================================================================
@@ -139,373 +151,123 @@ def salvar_descartadas(todas_vagas: list[dict], vagas_filtradas: list[dict]) -> 
 
 
 # ====================================================================
-# ── FASE 1: BUSCA PARALELA ───────────────────────────────────────────
+# ── FASE 1: BUSCA PARALELA (+ saúde das fontes + Lever) ──────────────
 # ====================================================================
+
+TERMOS_GUPY     = ["analista antifraude", "analista chargeback", "prevenção de fraudes",
+                   "analista financeiro", "backoffice financeiro", "analista de dados"]
+TERMOS_LINKEDIN = ["antifraude", "chargeback"]
+
 
 def buscar_todas_vagas_paralelo() -> list:
     print("\n[FASE 1] Buscando vagas em paralelo...")
-    todas_vagas = []
-    tarefas     = []
+    token   = os.environ.get("TELEGRAM_TOKEN")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
 
-    for termo in ["analista antifraude","analista chargeback","prevenção de fraudes","analista financeiro","backoffice financeiro","analista de dados"]:
-        tarefas.append(("gupy", termo))
-    for termo in ["antifraude","chargeback"]:
-        tarefas.append(("linkedin_posts", termo))
+    # cliques nos botões do Telegram + lembretes de follow-up (a cada rodada)
+    rotinas_telegram(token, chat_id)
+
+    todas_vagas = []
+    tarefas = [("gupy", t) for t in TERMOS_GUPY] + [("linkedin_posts", t) for t in TERMOS_LINKEDIN]
+    nomes   = {"gupy": "Gupy", "linkedin_posts": "LinkedIn (posts)"}
+    saude   = {nome: [0, ""] for nome in nomes.values()}   # fonte -> [qtd, erro]
 
     def executar_tarefa(args):
         fonte, termo = args
         try:
-            if fonte == "gupy":             return buscar_vagas_gupy(termo)
-            elif fonte == "linkedin_posts": return buscar_linkedin_posts(termo)
+            if fonte == "gupy":
+                return fonte, buscar_vagas_gupy(termo), ""
+            if fonte == "linkedin_posts":
+                return fonte, buscar_linkedin_posts(termo), ""
         except Exception as e:
             print(f"  ⚠️  Erro em {fonte} ({termo}): {e}")
-            return []
+            return fonte, [], f"{type(e).__name__}: {str(e)[:60]}"
+        return fonte, [], ""
 
     with Timer("Buscas paralelas (Gupy + LinkedIn)"):
         with ThreadPoolExecutor(max_workers=8) as executor:
             futuros = {executor.submit(executar_tarefa, t): t for t in tarefas}
             for futuro in as_completed(futuros):
-                resultado = futuro.result()
+                fonte, resultado, erro = futuro.result()
+                nome = nomes.get(fonte)
                 if resultado:
                     todas_vagas.extend(resultado)
+                    if nome:
+                        saude[nome][0] += len(resultado)
+                if erro and nome:
+                    saude[nome][1] = erro
 
     with Timer("Greenhouse"):
         print("  📡 Buscando nas empresas financeiras via Greenhouse...")
+        saude["Greenhouse"] = [0, ""]
         try:
-            todas_vagas.extend(buscar_todas_greenhouse())
+            achadas = buscar_todas_greenhouse()
+            todas_vagas.extend(achadas)
+            saude["Greenhouse"][0] = len(achadas)
         except Exception as e:
             print(f"  ⚠️  Erro no Greenhouse: {e}")
+            saude["Greenhouse"][1] = f"{type(e).__name__}: {str(e)[:60]}"
+
+    if LEVER_EMPRESAS:
+        with Timer("Lever"):
+            saude["Lever"] = [0, ""]
+            try:
+                achadas = buscar_todas_lever()
+                todas_vagas.extend(achadas)
+                saude["Lever"][0] = len(achadas)
+            except Exception as e:
+                print(f"  ⚠️  Erro no Lever: {e}")
+                saude["Lever"][1] = f"{type(e).__name__}: {str(e)[:60]}"
+
+    if PROGRAMATHOR_ATIVO:
+        with Timer("ProgramaThor"):
+            saude["ProgramaThor"] = [0, ""]
+            try:
+                achadas = buscar_todas_programathor()
+                todas_vagas.extend(achadas)
+                saude["ProgramaThor"][0] = len(achadas)
+            except Exception as e:
+                print(f"  ⚠️  Erro no ProgramaThor: {e}")
+                saude["ProgramaThor"][1] = f"{type(e).__name__}: {str(e)[:60]}"
+
+    # alerta no Telegram se alguma fonte está quebrada há várias rodadas
+    try:
+        verificar_e_alertar({f: (q, e) for f, (q, e) in saude.items()}, token, chat_id)
+    except Exception as e:
+        print(f"  ⚠️  Não consegui checar a saúde das fontes: {e}")
 
     print(f"\n  📥 Total bruto coletado: {len(todas_vagas)} vaga(s)")
     return todas_vagas
 
 
 # ====================================================================
-# ── FASE 4: MATCH SCORE ──────────────────────────────────────────────
+# ── RELATÓRIO SEMANAL (domingo) + FUNIL ──────────────────────────────
 # ====================================================================
 
-MODELOS_FALLBACK = [
-    'gemini-2.5-flash',
-    'gemini-3.5-flash',
-]
-
-
-def _prioridade(v: dict):
-    """Recentes (até 7 dias) primeiro; depois, as mais novas."""
-    return (0 if v.get('recente') else 1, v.get('dias_desde_publicacao', 9999))
-
-
-def _rotulo_idade(v: dict) -> str:
-    d = v.get('dias_desde_publicacao')
-    if d is None:
-        return ''
-    quando = 'hoje' if d == 0 else f'há {d} dia(s)'
-    origem = 'Publicada' if v.get('data_origem') == 'publicada' else 'Detectada'
-    return f"🗓️ {origem} {quando}\n"
-
-
-def calcular_match(vagas_filtradas: list[dict], perfil: dict) -> list[dict]:
-    print("\n[FASE 4] Triagem Híbrida e Inteligência Analítica (Match 2.0)...")
-
-    termos_chave  = ["antifraude","chargeback","fraude","risco","dados","data","python","sql","backoffice",
-                     "desenvolvedor","desenvolvedora","developer","full stack","fullstack","full-stack",
-                     "javascript","react","node","qa","teste","automação","automacao","rpa","sistemas",
-                     "suporte técnico","suporte tecnico","integração","integracao"]
-    termos_barrar = ["sênior","senior","lead","staff","coordenador","gerente","manager"]
-
-    vagas_pre_aprovadas = [
-        v for v in vagas_filtradas
-        if any(t in v.get('titulo','').lower() for t in termos_chave)
-        and not any(t in v.get('titulo','').lower() for t in termos_barrar)
-    ]
-
-    vagas_pre_aprovadas.sort(key=_prioridade)
-    print(f"  🔎 {len(vagas_pre_aprovadas)} vaga(s) pré-aprovadas para análise da IA (mais recentes primeiro)")
-
-    if not vagas_pre_aprovadas:
-        print("  ⚠️  Nenhuma vaga passou pelo pré-filtro. Retornando top 5.")
-        for v in vagas_filtradas[:5]:
-            v.setdefault('match_score', 0)
-            v.setdefault('resumo_ia', '')
-            v.setdefault('perguntas', [])
-            v.setdefault('mensagem_linkedin', '')
-        return vagas_filtradas[:5]
-
-    api_key = os.environ.get("GEMINI_API_KEY")
-    if not api_key:
-        print("  ⚠️  GEMINI_API_KEY não encontrada.")
-        for v in vagas_pre_aprovadas:
-            v.setdefault('match_score', 0)
-            v.setdefault('resumo_ia', '')
-            v.setdefault('perguntas', [])
-            v.setdefault('mensagem_linkedin', '')
-        return vagas_pre_aprovadas
-
-    client = genai.Client(api_key=api_key)
-
-    perfil_resumido = {
-        "cargo":       perfil.get("cargo_atual"),
-        "habilidades": perfil.get("habilidades"),
-        "areas":       perfil.get("preferencias_vaga", {}).get("areas"),
-        "objetivo":    ("Transição de carreira para tecnologia (desenvolvimento web, automação, dados, QA). "
-                        "Mais de 10 anos em meios de pagamento, chargeback e antifraude; formação full-stack "
-                        "em JavaScript (Node.js, React, SQL, APIs REST) e ADS em andamento. "
-                        "Busca vagas júnior ou pleno; vagas de tecnologia e de operações de pagamentos são aderentes."),
-    }
-
-    vagas_pontuadas = []
-
-    def analisar_vaga(vaga):
-        prompt = f"""
-        Você é um consultor. Analise esta vaga para o candidato: {json.dumps(perfil_resumido, ensure_ascii=False)}
-        Vaga: "{vaga['titulo']}" na empresa "{vaga['empresa']}"
-
-        Avalie a aderência de 0 a 100.
-        Se a "vaga" for o texto de uma postagem do LinkedIn, extraia também o nome do cargo
-        (sem hashtags, emojis ou a palavra [POST]) e o nome da empresa, somente se aparecer no texto.
-        Se a empresa não aparecer, deixe vazio. Nunca invente.
-        Retorne APENAS um objeto JSON válido (começando com {{ e terminando com }}):
-        {{
-            "score": 85,
-            "resumo": "Explicação curta.",
-            "perguntas_entrevista": ["p1", "p2"],
-            "mensagem_linkedin": "abordagem curta.",
-            "titulo_limpo": "Analista de Cobrança",
-            "empresa_citada": "Nome da Empresa ou vazio"
-        }}
-        """
-        for nome_modelo in MODELOS_FALLBACK:
-            for tentativa in range(2):
-                try:
-                    resposta = client.models.generate_content(model=nome_modelo, contents=prompt)
-                    texto_bruto = resposta.text.strip()
-                    match = re.search(r'\{.*\}', texto_bruto, re.DOTALL)
-                    if match:
-                        analise = json.loads(match.group(0))
-                        vaga['match_score']      = analise.get('score', 0)
-                        vaga['resumo_ia']        = analise.get('resumo', '')
-                        vaga['perguntas']        = analise.get('perguntas_entrevista', [])
-                        vaga['mensagem_linkedin']= analise.get('mensagem_linkedin', '')
-                        vaga['titulo_limpo']     = analise.get('titulo_limpo', '') or ''
-                        vaga['empresa_citada']   = analise.get('empresa_citada', '') or ''
-                        print(f"  ✅ '{vaga['titulo'][:30]}' analisado com {nome_modelo}")
-                        return vaga
-                    else:
-                        raise ValueError("JSON não encontrado")
-                except Exception as e:
-                    erro_str = str(e)
-                    espera = 15
-                    m = re.search(r'retry_delay\s*\{\s*seconds:\s*(\d+)', erro_str)
-                    if m:
-                        espera = int(m.group(1)) + 2
-                    if '429' in erro_str and tentativa == 0:
-                        print(f"  ⏳ {nome_modelo} — rate limit, aguardando {espera}s...")
-                        time.sleep(espera)
-                    else:
-                        print(f"  ⚠️  {nome_modelo} falhou: {erro_str[:80]}")
-                        break
-
-        print(f"  ❌ Todos os modelos falharam para '{vaga['titulo'][:30]}'")
-        vaga['match_score'] = 10
-        vaga.setdefault('resumo_ia', '')
-        vaga.setdefault('perguntas', [])
-        vaga.setdefault('mensagem_linkedin', '')
-        return vaga
-
-    with Timer("Análise IA (Gemini)"):
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            futuros = [executor.submit(analisar_vaga, v) for v in vagas_pre_aprovadas[:5]]
-            for futuro in as_completed(futuros):
-                vagas_pontuadas.append(futuro.result())
-
-    vagas_pontuadas.sort(key=lambda x: (x.get('recente', False), x.get('match_score', 0)), reverse=True)
-    return vagas_pontuadas
-
-
-def exibir_ranking(vagas_pontuadas: list[dict], limite: int = 15) -> None:
-    if not vagas_pontuadas:
-        print("\n❌ Nenhuma vaga para exibir no ranking.")
-        return
-
-    print(f"\n{'='*60}")
-    print(f"  🏆 TOP {limite} VAGAS MAIS ALINHADAS COM O SEU PERFIL")
-    print(f"{'='*60}")
-
-    for numero, vaga in enumerate(vagas_pontuadas[:limite], start=1):
-        print(f"\n[{numero:02d}] {vaga['titulo']}")
-        print(f"     Match Score : {vaga.get('match_score', 0)} pts ⭐")
-        print(f"     Empresa     : {vaga['empresa']}")
-        print(f"     Local       : {vaga['local']}")
-        print(f"     Fonte       : {vaga['fonte']}")
-        print(f"     Link        : {vaga['link']}")
-        print(f"     {'-'*52}")
-
-
-# ====================================================================
-# ── FASE 5: TELEGRAM + BANCO ENRIQUECIDO + PLANILHA ──────────────────
-# ====================================================================
-
-def enviar_para_telegram(vagas_pontuadas: list[dict], limite: int = 15) -> None:
-    if not vagas_pontuadas:
-        print("\n[FASE 5] Nenhuma vaga para enviar.")
-        return
-
-    # ── PLANILHA: antes do filtro de inéditas do banco (a própria planilha
-    #    evita duplicatas pelo link), para não depender do que já foi ao Telegram
-    registrar_na_planilha(vagas_pontuadas)
-
-    print("\n[FASE 5] Salvando vagas enriquecidas no Banco de Dados...")
-
-    conn   = sqlite3.connect("vagas_enviadas.db")
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS enviadas (
-            link        TEXT PRIMARY KEY,
-            data_envio  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            titulo      TEXT,
-            empresa     TEXT,
-            fonte       TEXT,
-            local       TEXT,
-            match_score INTEGER
-        )
-    """)
-
-    # Migração silenciosa
-    cursor.execute("PRAGMA table_info(enviadas)")
-    colunas_existentes = {row[1] for row in cursor.fetchall()}
-    for col in ['titulo','empresa','fonte','local','match_score']:
-        if col not in colunas_existentes:
-            tipo = 'INTEGER' if col == 'match_score' else 'TEXT'
-            cursor.execute(f"ALTER TABLE enviadas ADD COLUMN {col} {tipo}")
-    conn.commit()
-
-    TOKEN   = os.environ.get("TELEGRAM_TOKEN")
-    CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-
-    vagas_ineditas = []
-    for vaga in vagas_pontuadas:
-        cursor.execute("SELECT 1 FROM enviadas WHERE link = ?", (vaga['link'],))
-        if cursor.fetchone() is None:
-            try:
-                cursor.execute("""
-                    INSERT INTO enviadas (link, titulo, empresa, fonte, local, match_score)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """, (
-                    vaga['link'],
-                    vaga.get('titulo', '—'),
-                    vaga.get('empresa', '—'),
-                    vaga.get('fonte', '—'),
-                    vaga.get('local', '—'),
-                    vaga.get('match_score', 0)
-                ))
-                vagas_ineditas.append(vaga)
-            except Exception as e:
-                print(f"  ⚠️  Erro ao salvar vaga: {e}")
-        if len(vagas_ineditas) >= limite:
-            break
-
-    conn.commit()
+def _ja_enviou_hoje(nome: str) -> bool:
+    """Evita repetir o relatório a cada rodada do domingo. Registra no próprio banco."""
+    hoje = datetime.utcnow().strftime('%Y-%m-%d')
+    conn = sqlite3.connect("vagas_enviadas.db")
+    conn.execute("CREATE TABLE IF NOT EXISTS relatorios_enviados (nome TEXT, dia TEXT, PRIMARY KEY (nome, dia))")
+    ja = conn.execute("SELECT 1 FROM relatorios_enviados WHERE nome = ? AND dia = ?", (nome, hoje)).fetchone()
+    if not ja:
+        conn.execute("INSERT INTO relatorios_enviados VALUES (?, ?)", (nome, hoje))
+        conn.commit()
     conn.close()
+    return bool(ja)
 
-    if not vagas_ineditas:
-        print("  🤫 Nenhuma vaga nova nesta rodada. Nada foi enviado.")
-        return
-
-    print(f"  🔥 {len(vagas_ineditas)} vaga(s) inédita(s)! Enviando...")
-
-    # ── ITEM 7: Alerta de urgência separado para vagas ouro ──────────
-    vagas_ouro = [v for v in vagas_ineditas if v.get('match_score', 0) >= 85]
-    if vagas_ouro:
-        _enviar_alerta_urgencia(vagas_ouro, TOKEN, CHAT_ID)
-
-    # ── Mensagem normal com todas as inéditas ────────────────────────
-    mensagem = f"🚀 <b>NOVAS VAGAS INÉDITAS ({len(vagas_ineditas)})</b> 🚀\n\n"
-    for numero, vaga in enumerate(vagas_ineditas, start=1):
-        link    = vaga['link']
-        titulo  = str(vaga.get('titulo','—')).replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
-        empresa = str(vaga.get('empresa','—')).replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
-        score   = vaga.get('match_score', 0)
-
-        mensagem += f"<b>[{numero:02d}] {titulo}</b>\n"
-        mensagem += f"🏢 {empresa} | 📍 {vaga.get('local','—')}\n"
-        mensagem += f"⭐ <b>Match Score: {score}%</b>\n"
-        mensagem += _rotulo_idade(vaga)
-        if vaga.get('resumo_ia'):
-            mensagem += f"🤖 <i>{vaga['resumo_ia']}</i>\n"
-        mensagem += f"🔗 <a href='{link}'>Acessar Vaga</a>\n\n"
-        if score >= 75 and vaga.get('perguntas'):
-            mensagem += f"<b>💡 DOSSIÊ DE ENTREVISTA</b>\n"
-            for p in vaga['perguntas']:
-                mensagem += f"❓ {p}\n"
-            mensagem += f"💬 <b>Abordagem LinkedIn:</b>\n<i>{vaga['mensagem_linkedin']}</i>\n"
-        mensagem += "───────────────────\n\n"
-
-    _enviar_mensagem_telegram(mensagem, TOKEN, CHAT_ID)
-    print("  📱 ✅ Enviado com sucesso!")
-
-
-def _enviar_mensagem_telegram(mensagem: str, token: str, chat_id: str) -> None:
-    if not token or not chat_id:
-        print("  ⚠️  Telegram não configurado.")
-        return
-    url     = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {"chat_id": chat_id, "text": mensagem, "parse_mode": "HTML", "disable_web_page_preview": True}
-    try:
-        requests.post(url, json=payload, timeout=20)
-    except Exception as e:
-        print(f"  ❌ Erro de conexão com Telegram: {e}")
-
-
-# ====================================================================
-# ── ITEM 7: ALERTA DE URGÊNCIA ───────────────────────────────────────
-# ====================================================================
-
-def _enviar_alerta_urgencia(vagas_ouro: list[dict], token: str, chat_id: str) -> None:
-    """Envia mensagem separada e destacada para vagas com score >= 85."""
-    print(f"  🚨 {len(vagas_ouro)} vaga(s) OURO detectada(s)! Enviando alerta de urgência...")
-
-    mensagem = "🚨🚨 <b>ALERTA DE VAGA OURO!</b> 🚨🚨\n"
-    mensagem += "━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-
-    for vaga in vagas_ouro:
-        titulo  = str(vaga.get('titulo','—')).replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
-        empresa = str(vaga.get('empresa','—')).replace('&','&amp;').replace('<','&lt;').replace('>','&gt;')
-        score   = vaga.get('match_score', 0)
-        link    = vaga['link']
-
-        mensagem += f"🥇 <b>{titulo}</b>\n"
-        mensagem += f"🏢 {empresa}\n"
-        mensagem += f"⭐ Match Score: <b>{score}%</b>\n"
-        mensagem += _rotulo_idade(vaga)
-        if vaga.get('resumo_ia'):
-            mensagem += f"🤖 <i>{vaga['resumo_ia']}</i>\n"
-        mensagem += f"🔗 <a href='{link}'>👉 CANDIDATAR AGORA</a>\n\n"
-
-        if vaga.get('perguntas'):
-            mensagem += f"<b>💡 DOSSIÊ DE ENTREVISTA</b>\n"
-            for p in vaga['perguntas']:
-                mensagem += f"❓ {p}\n"
-            mensagem += f"\n💬 <b>Mensagem LinkedIn pronta:</b>\n<i>{vaga.get('mensagem_linkedin','')}</i>\n"
-
-        mensagem += "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-
-    _enviar_mensagem_telegram(mensagem, token, chat_id)
-
-
-# ====================================================================
-# ── ITEM 9: RELATÓRIO SEMANAL ────────────────────────────────────────
-# ====================================================================
 
 def verificar_e_enviar_relatorio_semanal() -> None:
     """
-    Roda todo domingo. Verifica o dia da semana e envia um resumo
-    com estatísticas dos últimos 7 dias.
+    Roda todo domingo (uma vez por dia). Envia o resumo dos últimos 7 dias
+    e, em seguida, o funil de candidaturas lido da planilha.
     """
     hoje = datetime.utcnow()
 
     # Só envia no domingo (weekday() == 6)
     if hoje.weekday() != 6:
+        return
+    if _ja_enviou_hoje("semanal"):
         return
 
     print("\n[RELATÓRIO SEMANAL] Domingo detectado — gerando relatório...")
@@ -570,6 +332,12 @@ def verificar_e_enviar_relatorio_semanal() -> None:
     _enviar_mensagem_telegram(mensagem, TOKEN, CHAT_ID)
     print("  📊 ✅ Relatório semanal enviado!")
 
+    # Funil de candidaturas (usa a planilha; se não houver, só avisa e segue)
+    try:
+        enviar_relatorio_funil()
+    except Exception as e:
+        print(f"  ⚠️  Funil não enviado: {e}")
+
 
 # ====================================================================
 # ── MAIN ─────────────────────────────────────────────────────────────
@@ -579,28 +347,27 @@ def main():
     inicio_total = time.time()
 
     print("\n" + "=" * 60)
-    print("          🤖 RADAR DE VAGAS — Sistema Completo")
-    print("     Gupy · Greenhouse · LinkedIn · PDF Reader · Google Sheets")
+    print("  🤖 RADAR DE VAGAS — Sistema Completo")
+    print("  Gupy · Greenhouse · LinkedIn · Lever · ProgramaThor · Google Sheets")
     print("=" * 60)
 
     # Fase 3: Perfil
     print("\n[FASE 3] Carregando perfil do candidato...")
     # O perfil vem somente do fase3_perfil/perfil.json (o leitor de PDF não é mais usado)
-
     perfil = carregar_perfil()
     exibir_perfil(perfil)
 
-    # ── ITEM 9: Relatório semanal (roda antes do pipeline) ───────────
+    # Relatório semanal (roda antes do pipeline)
     try:
         verificar_e_enviar_relatorio_semanal()
     except Exception as e:
         print(f"  ⚠️  Erro no relatório semanal: {e}")
 
-    # Fase 1: Busca paralela
+    # Fase 1: Busca paralela (inclui cliques do Telegram, follow-up e saúde das fontes)
     with Timer("FASE 1 — Busca total"):
         todas_vagas = buscar_todas_vagas_paralelo()
 
-    # Item 2: Deduplicação
+    # Deduplicação
     with Timer("DEDUP — Deduplicação"):
         todas_vagas = deduplicar_vagas(todas_vagas)
 
@@ -614,16 +381,16 @@ def main():
         vagas_filtradas = filtrar_vagas(todas_vagas)
         exibir_resultado_filtro(todas_vagas, vagas_filtradas)
 
-    # Item 3: Salvar descartadas
+    # Salvar descartadas
     with Timer("DEDUP — Salvando descartadas"):
         salvar_descartadas(todas_vagas, vagas_filtradas)
 
-    # Fase 4: Match Score
+    # Fase 4: Match Score (pula vagas já vistas, confere se está aberta, usa a descrição)
     with Timer("FASE 4 — Match Score"):
         vagas_com_score = calcular_match(vagas_filtradas, perfil)
         exibir_ranking(vagas_com_score, limite=15)
 
-    # Fase 5: Telegram + banco + alerta urgência + planilha
+    # Fase 5: Telegram (uma mensagem por vaga, com botões) + banco + planilha
     with Timer("FASE 5 — Telegram + Planilha"):
         enviar_para_telegram(vagas_com_score, limite=15)
 

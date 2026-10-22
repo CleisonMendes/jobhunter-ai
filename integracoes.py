@@ -9,6 +9,9 @@ Variáveis de ambiente (segredos do GitHub):
   SHEET_ABA           → (opcional) nome da aba, padrão "Vagas"
   SCORE_MIN_PLANILHA  → (opcional) score mínimo para entrar na planilha, padrão 60
 Se GOOGLE_CREDENTIALS ou SHEET_ID não existirem, a planilha é simplesmente ignorada.
+
+v2: a coluna I (Quando me inscrevi) agora nasce vazia e é preenchida pelo botão
+    "Me candidatei" do Telegram (telegram_acoes.py).
 """
 
 import os
@@ -206,10 +209,10 @@ def _aderencia(score: int) -> str:
     return f"🔴 {score}%"
 
 
-""" nova funçao"""
 def _data_inscricao() -> str:
-    """Retorna a data atual no formato brasileiro."""
+    """Retorna a data atual no formato brasileiro (não é mais usada na gravação inicial)."""
     return datetime.now().strftime("%d/%m/%Y")
+
 
 def _modelo(vaga: dict) -> str:
     texto = _normalizar(vaga.get("local", "")) + " " + _normalizar(vaga.get("titulo", ""))
@@ -306,7 +309,7 @@ def _linha_planilha(vaga: dict) -> list:
         _area(vaga),                               # F  Área/Ramo de atuação
         _modelo(vaga),                             # G  Modelo de Trabalho
         _fonte_planilha(vaga),                     # H  Onde encontrei essa vaga?
-        _data_inscricao(),                         # I  Quando me inscrevi (preencha ao aplicar)**
+        "",                                        # I  Quando me inscrevi (preenchida pelo botão "Me candidatei")
         "Inscrição",                               # J  Fase do processo
         "Não",                                     # K  Alguma ação é necessária?
         "",                                        # L  Qual ação
