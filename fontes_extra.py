@@ -36,6 +36,8 @@ TERMOS_TITULO = [
     "desenvolvedor", "desenvolvedora", "developer", "full stack", "fullstack", "full-stack",
     "javascript", "react", "node", "qa", "teste", "automacao", "rpa", "sistemas",
     "suporte tecnico", "integracao",
+    "programador", "software", "backend", "back-end", "back end",
+    "frontend", "front-end", "front end", "typescript", "java", "php",
 ]
 
 

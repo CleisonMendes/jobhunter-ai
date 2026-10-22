@@ -119,7 +119,9 @@ def calcular_match(vagas_filtradas: list[dict], perfil: dict) -> list[dict]:
     termos_chave  = ["antifraude","chargeback","fraude","risco","dados","data","python","sql","backoffice",
                      "desenvolvedor","desenvolvedora","developer","full stack","fullstack","full-stack",
                      "javascript","react","node","qa","teste","automação","automacao","rpa","sistemas",
-                     "suporte técnico","suporte tecnico","integração","integracao"]
+                     "suporte técnico","suporte tecnico","integração","integracao",
+                     "programador","programadora","software","backend","back-end","back end",
+                     "frontend","front-end","front end","typescript","java","php"]
     termos_barrar = ["sênior","senior","lead","staff","coordenador","gerente","manager"]
 
     pre = [
