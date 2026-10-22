@@ -206,6 +206,11 @@ def _aderencia(score: int) -> str:
     return f"🔴 {score}%"
 
 
+""" nova funçao"""
+def _data_inscricao() -> str:
+    """Retorna a data atual no formato brasileiro."""
+    return datetime.now().strftime("%d/%m/%Y")
+
 def _modelo(vaga: dict) -> str:
     texto = _normalizar(vaga.get("local", "")) + " " + _normalizar(vaga.get("titulo", ""))
     if "remoto" in texto or "remote" in texto or "home office" in texto:
@@ -301,7 +306,7 @@ def _linha_planilha(vaga: dict) -> list:
         _area(vaga),                               # F  Área/Ramo de atuação
         _modelo(vaga),                             # G  Modelo de Trabalho
         _fonte_planilha(vaga),                     # H  Onde encontrei essa vaga?
-        "",                                        # I  Quando me inscrevi (preencha ao aplicar)
+        _data_inscricao(),                         # I  Quando me inscrevi (preencha ao aplicar)**
         "Inscrição",                               # J  Fase do processo
         "Não",                                     # K  Alguma ação é necessária?
         "",                                        # L  Qual ação
