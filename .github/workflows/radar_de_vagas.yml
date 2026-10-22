@@ -1,0 +1,56 @@
+name: Radar de Vagas Automacao
+
+on:
+  schedule:
+    # Executa automaticamente no minuto 0 a cada 2 horas
+    - cron: '0 */2 * * *'
+  workflow_dispatch: # Botão para executar manualmente quando quiser
+
+# Evita duas execuções ao mesmo tempo (cron + manual) brigando pelo commit do banco
+concurrency:
+  group: radar-de-vagas
+  cancel-in-progress: false
+
+jobs:
+  procurar-vagas:
+    runs-on: ubuntu-latest
+
+    # ⚠️ PERMISSÃO NECESSÁRIA PARA O ROBÔ SALVAR O BANCO DE DADOS E O PERFIL ⚠️
+    permissions:
+      contents: write
+
+    steps:
+      - name: Aceder ao código
+        uses: actions/checkout@v5
+
+      - name: Preparar o Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Instalar dependências
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests beautifulsoup4 lxml pypdf google-generativeai
+          pip install google-genai
+          pip install gspread google-auth
+
+      - name: Executar o Radar de Vagas
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          # Opcional: empresas do Lever separadas por vírgula (ex.: empresa-a,empresa-b). Vazio = desligado.
+          LEVER_EMPRESAS: ${{ secrets.LEVER_EMPRESAS }}
+        run: python main.py
+
+      - name: Salvar e persistir Banco de Dados e Perfil
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add vagas_enviadas.db || true
+          git add fase3_perfil/perfil.json || true
+          git commit -m "🤖 Auto-update: DB de vagas e/ou Perfil JSON [skip ci]" || true
+          git push || true

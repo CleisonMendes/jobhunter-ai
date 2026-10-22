@@ -1,0 +1,43 @@
+name: Cliques do Telegram (opcional)
+
+# Processa só os botões "Me candidatei" / "Descartar" e atualiza a planilha.
+# Não busca vagas, não usa o Gemini e não mexe no banco (nada para commitar).
+# Em repositório PRIVADO, cada execução consome minutos do plano gratuito:
+# a cada 15 min dá ~2.900 min/mês; de hora em hora, ~720 min/mês.
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: cliques-telegram
+  cancel-in-progress: false
+
+jobs:
+  cliques:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Aceder ao código
+        uses: actions/checkout@v5
+
+      - name: Preparar o Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Instalar dependências
+        run: pip install requests gspread google-auth
+
+      - name: Processar cliques
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+        run: |
+          python -c "import os; from telegram_acoes import processar_cliques; processar_cliques(os.environ['TELEGRAM_TOKEN'], os.environ['TELEGRAM_CHAT_ID'])"
