@@ -53,4 +53,6 @@ jobs:
           git add vagas_enviadas.db || true
           git add fase3_perfil/perfil.json || true
           git commit -m "🤖 Auto-update: DB de vagas e/ou Perfil JSON [skip ci]" || true
+          # se você (ou outra execução) enviou algo ao repositório durante a rodada, integra antes de enviar
+          git pull --rebase --autostash origin main || true
           git push || true
