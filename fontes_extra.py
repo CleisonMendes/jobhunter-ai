@@ -113,7 +113,7 @@ PROGRAMATHOR_PAGINAS = int(os.environ.get("PROGRAMATHOR_PAGINAS", "2"))
 _PT_BASE = "https://programathor.com.br"
 _PT_CARD = re.compile(r'<a\b[^>]*href="(?:https://programathor\.com\.br)?(/jobs/(\d+)-([^"#?]*))(?:[?#][^"]*)?"[^>]*>(.*?)</a>',
                       re.S | re.I)
-_PT_LOCAL = re.compile(r"\((H[ií]brido|Presencial|Remoto)\)", re.I)
+_PT_LOCAL = re.compile(r"\((H[ií]brido|Presencial|Remoto)\)|^Remoto$", re.I)
 
 
 def _linhas_do_card(inner_html: str) -> list[str]:
@@ -150,6 +150,7 @@ def _parse_programathor(htm: str) -> list[dict]:
                 empresa = linhas[idx_local - 1]
             if idx_local >= 2:
                 titulo = linhas[idx_local - 2]
+        titulo = re.sub(r"\s+NOVA$", "", titulo).strip()   # selo "NOVA" do site
         palavras_slug = {w for w in _norm(slug).split("-") if len(w) > 2}
         if not titulo or not (palavras_slug & set(re.findall(r"\w{3,}", _norm(titulo)))):
             titulo = _titulo_do_slug(slug)

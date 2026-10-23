@@ -73,9 +73,15 @@ def _links_ja_vistos(db: str = DB) -> set:
     vistos = set()
     try:
         conn = sqlite3.connect(db)
-        for tabela in ("enviadas", "descartadas"):
+        # 'descartadas' também guarda o que o FILTRO recusou (e o filtro muda com o tempo),
+        # então só as vagas confirmadas como encerradas contam como "já vistas".
+        consultas = {
+            "enviadas":    "SELECT link FROM enviadas",
+            "descartadas": "SELECT link FROM descartadas WHERE motivo = 'Vaga encerrada'",
+        }
+        for tabela, sql in consultas.items():
             try:
-                vistos.update((r[0] or "").strip() for r in conn.execute(f"SELECT link FROM {tabela}"))
+                vistos.update((r[0] or "").strip() for r in conn.execute(sql))
             except sqlite3.OperationalError:
                 pass  # tabela ainda não existe
         conn.close()
@@ -292,8 +298,12 @@ def _mensagem_vaga(vaga: dict, numero: int) -> str:
     ouro = score >= 85
     cabecalho = "🚨🥇 <b>VAGA OURO</b>" if ouro else f"<b>[{numero:02d}]</b>"
 
-    t = f"{cabecalho} <b>{_esc(vaga.get('titulo', '—'))[:150]}</b>\n"
-    t += f"🏢 {_esc(vaga.get('empresa', '—'))} | 📍 {_esc(vaga.get('local', '—'))}\n"
+    titulo = vaga.get('titulo_limpo') or vaga.get('titulo', '—')
+    empresa = vaga.get('empresa_citada') or vaga.get('empresa', '—')
+    if 'postagem' in str(empresa).lower():
+        empresa = '(empresa não identificada)'
+    t = f"{cabecalho} <b>{_esc(titulo)[:150]}</b>\n"
+    t += f"🏢 {_esc(empresa)} | 📍 {_esc(vaga.get('local', '—'))}\n"
     t += f"⭐ <b>Aderência: {score}%</b>\n"
     if vaga.get('base_analise') == 'título':
         t += "⚠️ <i>Análise só pelo título (descrição indisponível)</i>\n"
