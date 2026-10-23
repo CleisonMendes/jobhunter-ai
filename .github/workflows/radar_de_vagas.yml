@@ -4,9 +4,9 @@ on:
   schedule:
     # Executa automaticamente no minuto 0 a cada 2 horas
     - cron: '0 */2 * * *'
-  workflow_dispatch: # Botão para executar manualmente quando quiser
+  workflow_dispatch: # botão para executar manualmente quando quiser
 
-# Evita duas execuções ao mesmo tempo (cron + manual) brigando pelo commit do banco
+# Evita duas execuções ao mesmo tempo brigando pelo commit do banco de dados
 concurrency:
   group: radar-de-vagas
   cancel-in-progress: false
@@ -14,8 +14,9 @@ concurrency:
 jobs:
   procurar-vagas:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
-    # ⚠️ PERMISSÃO NECESSÁRIA PARA O ROBÔ SALVAR O BANCO DE DADOS E O PERFIL ⚠️
+    # Permissão para o robô salvar o banco de dados e o perfil no repositório
     permissions:
       contents: write
 
@@ -42,7 +43,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
           SHEET_ID: ${{ secrets.SHEET_ID }}
-          # Opcional: empresas do Lever separadas por vírgula (ex.: empresa-a,empresa-b). Vazio = desligado.
+          # Opcional: empresas do Lever separadas por vírgula (vazio = Lever desligado)
           LEVER_EMPRESAS: ${{ secrets.LEVER_EMPRESAS }}
         run: python main.py
 
@@ -53,6 +54,5 @@ jobs:
           git add vagas_enviadas.db || true
           git add fase3_perfil/perfil.json || true
           git commit -m "🤖 Auto-update: DB de vagas e/ou Perfil JSON [skip ci]" || true
-          # se você (ou outra execução) enviou algo ao repositório durante a rodada, integra antes de enviar
-          git pull --rebase --autostash origin main || true
+          git pull --rebase --autostash || true
           git push || true

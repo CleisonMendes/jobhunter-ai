@@ -304,6 +304,7 @@ def buscar_linkedin_posts(termo: str) -> list[dict]:
             for res in resultados:
                 elem_titulo = res.find('h2', class_='result__title')
                 elem_link   = res.find('a', class_='result__url')
+                elem_trecho = res.find('a', class_='result__snippet')
 
                 if elem_titulo and elem_link:
                     titulo_bruto = elem_titulo.text.strip()
@@ -322,6 +323,7 @@ def buscar_linkedin_posts(termo: str) -> list[dict]:
                             'fonte':    'LinkedIn Posts',
                             # DATA: o DuckDuckGo não informa, mas o ID do post na URL carrega o horário
                             'data_pub': _data_do_post(link),
+                            'descricao': elem_trecho.get_text(' ', strip=True) if elem_trecho else '',
                         })
     except Exception as e:
         print(f"  ❌ Erro ao buscar posts no DuckDuckGo: {e}")

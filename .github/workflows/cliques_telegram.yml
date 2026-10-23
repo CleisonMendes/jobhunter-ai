@@ -1,25 +1,22 @@
 name: Cliques do Telegram (opcional)
 
-# Processa só os botões "Me candidatei" / "Descartar" e atualiza a planilha.
-# Não busca vagas, não usa o Gemini e não mexe no banco (nada para commitar).
-# Em repositório PRIVADO, cada execução consome minutos do plano gratuito:
-# a cada 15 min dá ~2.900 min/mês; de hora em hora, ~720 min/mês.
-
+# Processa só os cliques em "Me candidatei" / "Descartar" e atualiza a planilha.
+# Não busca vagas, não usa o Gemini e não mexe no banco de dados.
+# Em repositório PÚBLICO não gasta minutos do plano. Em repositório privado, troque o cron
+# por '0 * * * *' (a cada hora) para ficar dentro do plano gratuito.
 on:
   schedule:
     - cron: '*/15 * * * *'
   workflow_dispatch:
 
 concurrency:
-  group: cliques-telegram
+  group: radar-de-vagas
   cancel-in-progress: false
 
 jobs:
   cliques:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-
+    timeout-minutes: 10
     steps:
       - name: Aceder ao código
         uses: actions/checkout@v5
@@ -28,16 +25,16 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-          cache: 'pip'
 
       - name: Instalar dependências
-        run: pip install requests gspread google-auth
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests beautifulsoup4 lxml gspread google-auth
 
-      - name: Processar cliques
+      - name: Processar cliques e lembretes
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
           SHEET_ID: ${{ secrets.SHEET_ID }}
-        run: |
-          python -c "import os; from telegram_acoes import processar_cliques; processar_cliques(os.environ['TELEGRAM_TOKEN'], os.environ['TELEGRAM_CHAT_ID'])"
+        run: python telegram_acoes.py
