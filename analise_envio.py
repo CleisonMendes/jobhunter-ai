@@ -73,15 +73,9 @@ def _links_ja_vistos(db: str = DB) -> set:
     vistos = set()
     try:
         conn = sqlite3.connect(db)
-        # 'descartadas' também guarda o que o FILTRO recusou (e o filtro muda com o tempo),
-        # então só as vagas confirmadas como encerradas contam como "já vistas".
-        consultas = {
-            "enviadas":    "SELECT link FROM enviadas",
-            "descartadas": "SELECT link FROM descartadas WHERE motivo = 'Vaga encerrada'",
-        }
-        for tabela, sql in consultas.items():
+        for tabela in ("enviadas", "descartadas"):
             try:
-                vistos.update((r[0] or "").strip() for r in conn.execute(sql))
+                vistos.update((r[0] or "").strip() for r in conn.execute(f"SELECT link FROM {tabela}"))
             except sqlite3.OperationalError:
                 pass  # tabela ainda não existe
         conn.close()
@@ -202,6 +196,9 @@ TAREFA
 1. "score": aderência de 0 a 100. Requisitos obrigatórios pesam mais que os desejáveis.
 2. "requisitos_atendidos": até 5 requisitos da vaga que o perfil atende (frases curtas).
 3. "gaps": até 5 requisitos da vaga que o perfil não cobre ou cobre pouco (frases curtas).
+4. "resumo": 2 a 4 frases explicando POR QUE a aderência é essa, citando experiências e habilidades concretas do candidato que casam com a vaga.
+5. "perguntas_entrevista": 5 perguntas específicas desta vaga (não genéricas), ligadas às experiências do candidato.
+6. "mensagem_linkedin": mensagem pronta de abordagem ao recrutador (até 450 caracteres), citando a vaga e a empresa; use [Nome do Recrutador].
 Use somente requisitos escritos na descrição. Nunca invente.
 Se a "vaga" for o texto de uma postagem do LinkedIn, extraia também o nome do cargo
 (sem hashtags, emojis ou a palavra [POST]) e o nome da empresa, somente se aparecer no texto.
@@ -209,11 +206,11 @@ Se a empresa não aparecer, deixe vazio.
 Retorne APENAS um objeto JSON válido (começando com {{ e terminando com }}):
 {{
     "score": 85,
-    "resumo": "Explicação curta (1 a 2 frases).",
+    "resumo": "Explicação de 2 a 4 frases.",
     "requisitos_atendidos": ["..."],
     "gaps": ["..."],
-    "perguntas_entrevista": ["p1", "p2"],
-    "mensagem_linkedin": "abordagem curta.",
+    "perguntas_entrevista": ["p1", "p2", "p3", "p4", "p5"],
+    "mensagem_linkedin": "Olá [Nome do Recrutador], ...",
     "titulo_limpo": "Analista de Cobrança",
     "empresa_citada": "Nome da Empresa ou vazio"
 }}"""
@@ -293,36 +290,49 @@ def exibir_ranking(vagas_pontuadas: list[dict], limite: int = 15) -> None:
 # ── FASE 5: TELEGRAM + BANCO + PLANILHA ──────────────────────────────
 # ====================================================================
 
-def _mensagem_vaga(vaga: dict, numero: int) -> str:
+SEP = "━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+
+def _mensagens_vaga(vaga: dict, numero: int) -> list[str]:
+    """Formato do alerta que você já conhecia (OURO e normal), com 'Atende' e 'Gaps' a mais.
+    Se passar do limite do Telegram, o dossiê vai em uma segunda mensagem."""
     score = vaga.get('match_score', 0)
     ouro = score >= 85
-    cabecalho = "🚨🥇 <b>VAGA OURO</b>" if ouro else f"<b>[{numero:02d}]</b>"
+    titulo  = _esc(vaga.get('titulo', '—'))[:200]
+    empresa = _esc(vaga.get('empresa', '—'))
+    link    = html.escape(vaga.get('link', ''), quote=True)
 
-    titulo = vaga.get('titulo_limpo') or vaga.get('titulo', '—')
-    empresa = vaga.get('empresa_citada') or vaga.get('empresa', '—')
-    if 'postagem' in str(empresa).lower():
-        empresa = '(empresa não identificada)'
-    t = f"{cabecalho} <b>{_esc(titulo)[:150]}</b>\n"
-    t += f"🏢 {_esc(empresa)} | 📍 {_esc(vaga.get('local', '—'))}\n"
-    t += f"⭐ <b>Aderência: {score}%</b>\n"
+    if ouro:
+        t = f"🚨🚨 <b>ALERTA DE VAGA OURO!</b> 🚨🚨\n{SEP}\n\n🥇 <b>{titulo}</b>\n🏢 {empresa}\n"
+        t += f"⭐ Match Score: <b>{score}%</b>\n"
+    else:
+        t = f"<b>[{numero:02d}] {titulo}</b>\n🏢 {empresa} | 📍 {_esc(vaga.get('local', '—'))}\n"
+        t += f"⭐ <b>Match Score: {score}%</b>\n"
     if vaga.get('base_analise') == 'título':
-        t += "⚠️ <i>Análise só pelo título (descrição indisponível)</i>\n"
+        t += "⚠️ <i>Análise só pelo título (descrição da vaga indisponível)</i>\n"
     t += _rotulo_idade(vaga)
     if vaga.get('resumo_ia'):
-        t += f"🤖 <i>{_esc(vaga['resumo_ia'])[:400]}</i>\n"
+        t += f"🤖 <i>{_esc(vaga['resumo_ia'])[:1200]}</i>\n"
     if vaga.get('requisitos_atendidos'):
-        t += "✅ <b>Atende:</b> " + "; ".join(_esc(r)[:100] for r in vaga['requisitos_atendidos'][:4]) + "\n"
+        t += "✅ <b>Atende:</b> " + "; ".join(_esc(r)[:220] for r in vaga['requisitos_atendidos'][:5]) + "\n"
     if vaga.get('gaps'):
-        t += "🔸 <b>Gaps:</b> " + "; ".join(_esc(g)[:100] for g in vaga['gaps'][:4]) + "\n"
-    link = html.escape(vaga.get('link', ''), quote=True)
+        t += "🔸 <b>Gaps:</b> " + "; ".join(_esc(g)[:220] for g in vaga['gaps'][:5]) + "\n"
     t += f"🔗 <a href='{link}'>{'👉 CANDIDATAR AGORA' if ouro else 'Acessar Vaga'}</a>\n"
+
+    dossie = ""
     if (ouro or score >= 75) and vaga.get('perguntas'):
-        t += "\n<b>💡 DOSSIÊ DE ENTREVISTA</b>\n"
-        for p in vaga['perguntas'][:4]:
-            t += f"❓ {_esc(p)[:200]}\n"
+        dossie = "\n<b>💡 DOSSIÊ DE ENTREVISTA</b>\n"
+        for p in vaga['perguntas'][:5]:
+            dossie += f"❓ {_esc(p)[:300]}\n"
         if vaga.get('mensagem_linkedin'):
-            t += f"💬 <b>Abordagem LinkedIn:</b>\n<i>{_esc(vaga['mensagem_linkedin'])[:400]}</i>\n"
-    return t
+            titulo_msg = "💬 <b>Mensagem LinkedIn pronta:</b>" if ouro else "💬 <b>Abordagem LinkedIn:</b>"
+            dossie += f"\n{titulo_msg}\n<i>{_esc(vaga['mensagem_linkedin'])[:800]}</i>\n"
+    if ouro:
+        dossie += SEP
+
+    if len(t) + len(dossie) <= 3900:
+        return [t + dossie]
+    return [t, dossie.strip()] if dossie.strip() else [t[:3900]]
 
 
 def enviar_para_telegram(vagas_pontuadas: list[dict], limite: int = 15) -> None:
@@ -385,5 +395,8 @@ def enviar_para_telegram(vagas_pontuadas: list[dict], limite: int = 15) -> None:
     enviar_telegram(f"🚀 <b>NOVAS VAGAS INÉDITAS ({len(ineditas)})</b> 🚀", TOKEN, CHAT_ID)
     for numero, vaga in enumerate(ineditas, start=1):
         botoes = botoes_vaga(vaga['link']) if usar_botoes and vaga.get('match_score', 0) >= score_min else None
-        enviar_telegram(_mensagem_vaga(vaga, numero), TOKEN, CHAT_ID, botoes=botoes)
+        partes = _mensagens_vaga(vaga, numero)
+        enviar_telegram(partes[0], TOKEN, CHAT_ID, botoes=botoes)  # botões na primeira mensagem
+        for extra in partes[1:]:
+            enviar_telegram(extra, TOKEN, CHAT_ID)
     print("  📱 ✅ Enviado com sucesso!")
