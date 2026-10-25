@@ -1,3 +1,4 @@
+
 """
 RADAR DE VAGAS — analise_envio.py (NOVO)
 Substitui no main.py tudo de "FASE 4: MATCH SCORE" até o fim de _enviar_alerta_urgencia.
@@ -26,6 +27,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from integracoes import registrar_na_planilha
 from paginas_vaga import obter_descricao, vaga_aberta
 from telegram_acoes import enviar_telegram, botoes_vaga, planilha_configurada
+from curriculo import gerar_e_enviar, AUTO_SCORE, AUTO_MAX
 
 DB = "vagas_enviadas.db"
 MAX_ANALISES = int(os.environ.get("MAX_ANALISES_POR_RODADA", "5"))
@@ -176,6 +178,7 @@ def calcular_match(vagas_filtradas: list[dict], perfil: dict) -> list[dict]:
 
     def analisar_vaga(vaga):
         descricao = obter_descricao(vaga)
+        vaga['descricao'] = descricao  # o currículo adaptado reaproveita
         vaga['base_analise'] = 'descrição' if descricao else 'título'
         print(f"  📄 '{vaga['titulo'][:30]}': "
               + (f"descrição obtida ({len(descricao)} caracteres)" if descricao else "sem descrição (só título)"))
@@ -391,6 +394,7 @@ def enviar_para_telegram(vagas_pontuadas: list[dict], limite: int = 15) -> None:
     except ValueError:
         score_min = 60
     usar_botoes = planilha_configurada()
+    auto_restantes = AUTO_MAX
 
     enviar_telegram(f"🚀 <b>NOVAS VAGAS INÉDITAS ({len(ineditas)})</b> 🚀", TOKEN, CHAT_ID)
     for numero, vaga in enumerate(ineditas, start=1):
@@ -399,4 +403,11 @@ def enviar_para_telegram(vagas_pontuadas: list[dict], limite: int = 15) -> None:
         enviar_telegram(partes[0], TOKEN, CHAT_ID, botoes=botoes)  # botões na primeira mensagem
         for extra in partes[1:]:
             enviar_telegram(extra, TOKEN, CHAT_ID)
+        # currículo adaptado + kit, automático nas vagas de score alto (até AUTO_MAX por rodada)
+        if auto_restantes > 0 and vaga.get('match_score', 0) >= AUTO_SCORE:
+            auto_restantes -= 1
+            try:
+                gerar_e_enviar(vaga, TOKEN, CHAT_ID)
+            except Exception as e:
+                print(f"  ⚠️  Currículo automático falhou: {type(e).__name__}: {e}")
     print("  📱 ✅ Enviado com sucesso!")
