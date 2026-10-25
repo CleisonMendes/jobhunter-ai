@@ -27,20 +27,39 @@ from datetime import datetime, timezone
 # ── GUPY (endpoint novo) ─────────────────────────────────────────────
 # ====================================================================
 
-def buscar_vagas_gupy(termo: str, limite: int = 20) -> list[dict]:
-    """Endpoint público do portal.gupy.io (o domínio portal.api.gupy.io não responde mais)."""
-    print(f"\n🔍 [Gupy] Buscando: '{termo}'...")
-    url = "https://employability-portal.gupy.io/api/v1/jobs"
-    params = {"jobName": termo, "limit": limite, "offset": 0}
-    headers = {"User-Agent": "Mozilla/5.0"}
+GUPY_ENDPOINTS = [
+    "https://employability-portal.gupy.io/api/v1/jobs",
+    "https://portal.api.gupy.io/api/v1/jobs",
+]
+GUPY_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"),
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "pt-BR,pt;q=0.9",
+    "Origin": "https://portal.gupy.io",
+    "Referer": "https://portal.gupy.io/",
+}
 
-    try:
-        resp = requests.get(url, params=params, headers=headers, timeout=20)
-        resp.raise_for_status()
-        corpo = resp.json()
-        itens = corpo.get("data") or corpo.get("results") or []
-    except Exception as e:
-        print(f"   ⚠️  Erro Gupy: {e}")
+
+def buscar_vagas_gupy(termo: str, limite: int = 10) -> list[dict]:
+    """API pública do portal.gupy.io. Tenta os dois endereços conhecidos e mostra o motivo se falhar."""
+    print(f"\n🔍 [Gupy] Buscando: '{termo}'...")
+    params = {"jobName": termo, "limit": min(limite, 10), "offset": 0}
+    itens = []
+    for url in GUPY_ENDPOINTS:
+        host = url.split("/")[2]
+        try:
+            resp = requests.get(url, params=params, headers=GUPY_HEADERS, timeout=20)
+            if resp.status_code != 200:
+                trecho = (resp.text or "")[:120].replace("\n", " ")
+                print(f"   ⚠️  Gupy ({host}): HTTP {resp.status_code} | {trecho}")
+                continue
+            corpo = resp.json()
+            itens = corpo.get("data") or corpo.get("results") or []
+            break
+        except Exception as e:
+            print(f"   ⚠️  Gupy ({host}): {e}")
+    if not itens:
         return []
 
     vagas = []
