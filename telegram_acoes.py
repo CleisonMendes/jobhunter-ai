@@ -29,7 +29,11 @@ from integracoes import _abrir_aba, PRIMEIRA_LINHA_DADOS
 
 STATUS_CANDIDATEI = os.environ.get("STATUS_CANDIDATEI", "Em andamento")
 STATUS_DESCARTADA = os.environ.get("STATUS_DESCARTADA", "Descartada")
+PENDENTE_CURRICULO = "📄 Gerar currículo"  # marcador na coluna L (Qual ação) quando você pede o currículo
 FOLLOWUP_DIAS = int(os.environ.get("FOLLOWUP_DIAS", "2"))
+# Só lembra de candidaturas com data a partir de (dd/mm/aaaa). Ignora as datas que o robô antigo
+# preenchia sozinho ao registrar a vaga. Vazio = sem corte.
+FOLLOWUP_DESDE = os.environ.get("FOLLOWUP_DESDE", "").strip()
 
 # colunas da planilha (1 = A)
 C_TITULO, C_LINK, C_EMPRESA = 2, 3, 4
@@ -69,12 +73,41 @@ def hash_link(link: str) -> str:
     return hashlib.sha1((link or "").strip().encode("utf-8")).hexdigest()[:12]
 
 
-def botoes_vaga(link: str) -> list:
+def botoes_vaga(link: str, curriculo: bool = True) -> list:
     h = hash_link(link)
+    teclado = [[
+        {"text": "✅ Me candidatei", "callback_data": f"c|{h}"},
+        {"text": "🗑️ Descartar",      "callback_data": f"d|{h}"},
+    ]]
+    if curriculo:
+        teclado.append([{"text": "📄 Gerar currículo + kit", "callback_data": f"g|{h}"}])
+    return teclado
+
+
+def botoes_vaga_sem_curriculo(h: str) -> list:
     return [[
         {"text": "✅ Me candidatei", "callback_data": f"c|{h}"},
         {"text": "🗑️ Descartar",      "callback_data": f"d|{h}"},
     ]]
+
+
+def enviar_documento(caminho: str, legenda: str, token: str, chat_id: str) -> bool:
+    """Envia um arquivo (ex.: o currículo .docx) ao Telegram."""
+    if not token or not chat_id:
+        print("  ⚠️  Telegram não configurado.")
+        return False
+    try:
+        with open(caminho, "rb") as f:
+            r = requests.post(f"https://api.telegram.org/bot{token}/sendDocument",
+                              data={"chat_id": chat_id, "caption": legenda[:1000], "parse_mode": "HTML"},
+                              files={"document": (os.path.basename(caminho), f)}, timeout=60)
+        if not r.ok:
+            print(f"  ❌ Telegram respondeu {r.status_code} ao enviar o arquivo: {r.text[:120]}")
+            return False
+        return True
+    except Exception as e:
+        print(f"  ❌ Erro ao enviar o arquivo ao Telegram: {e}")
+        return False
 
 
 def planilha_configurada() -> bool:
@@ -102,11 +135,11 @@ def _responder(base: str, callback_id: str, texto: str) -> None:
         pass  # clique antigo demais: tudo bem, a planilha já foi atualizada
 
 
-def _trocar_botoes(base: str, chat_id: str, message_id, rotulo: str) -> None:
+def _trocar_botoes(base: str, chat_id: str, message_id, rotulo: str, teclado=None) -> None:
     try:
         requests.post(f"{base}/editMessageReplyMarkup", json={
             "chat_id": chat_id, "message_id": message_id,
-            "reply_markup": {"inline_keyboard": [[{"text": rotulo, "callback_data": "x"}]]},
+            "reply_markup": {"inline_keyboard": teclado or [[{"text": rotulo, "callback_data": "x"}]]},
         }, timeout=15)
     except Exception:
         pass
@@ -150,7 +183,7 @@ def processar_cliques(token: str, chat_id: str) -> None:
         if str((msg.get("chat") or {}).get("id")) != str(chat_id):
             continue  # ignora cliques de outros chats
         partes = (cq.get("data") or "").split("|")
-        if len(partes) != 2 or partes[0] not in ("c", "d"):
+        if len(partes) != 2 or partes[0] not in ("c", "d", "g"):
             continue
         acao, h = partes
         linha = linhas.get(h)
@@ -168,6 +201,14 @@ def processar_cliques(token: str, chat_id: str) -> None:
                 aba.batch_update(dados, value_input_option="USER_ENTERED")
                 _responder(base, cq["id"], "Candidatura registrada na planilha ✅")
                 _trocar_botoes(base, chat_id, msg.get("message_id"), "✅ Candidatura registrada")
+            elif acao == "g":
+                aba.batch_update(
+                    [{"range": f"L{linha}", "values": [[PENDENTE_CURRICULO]]}],
+                    value_input_option="USER_ENTERED")
+                _responder(base, cq["id"], "Pedido registrado: o currículo chega na próxima rodada 📄")
+                teclado = botoes_vaga_sem_curriculo(h)
+                teclado.append([{"text": "⏳ Currículo na fila", "callback_data": "x"}])
+                _trocar_botoes(base, chat_id, msg.get("message_id"), "", teclado=teclado)
             else:
                 aba.batch_update(
                     [{"range": f"N{linha}", "values": [[STATUS_DESCARTADA]]}],
@@ -209,6 +250,12 @@ def lembretes_followup(token: str, chat_id: str, max_por_rodada: int = 10) -> No
     if aba is None:
         return
     hoje = datetime.now().date()
+    desde = None
+    if FOLLOWUP_DESDE:
+        try:
+            desde = datetime.strptime(FOLLOWUP_DESDE, "%d/%m/%Y").date()
+        except ValueError:
+            print(f"  ⚠️  FOLLOWUP_DESDE inválido ({FOLLOWUP_DESDE}). Use dd/mm/aaaa. Sem corte.")
     pendentes = []
 
     for n, lin in enumerate(aba.get_all_values(), start=1):
@@ -220,6 +267,8 @@ def lembretes_followup(token: str, chat_id: str, max_por_rodada: int = 10) -> No
         fase, acao = lin[C_FASE - 1].strip(), lin[C_ACAO_NEC - 1].strip().lower()
         status, feedback = lin[C_STATUS - 1].strip().lower(), lin[C_FEEDBACK - 1].strip()
         if not (titulo and data):
+            continue
+        if desde and data < desde:
             continue
         if (hoje - data).days < FOLLOWUP_DIAS:
             continue
@@ -267,7 +316,13 @@ def rotinas_telegram(token: str, chat_id: str) -> None:
     if not planilha_configurada():
         print("\n[BOTÕES/FOLLOW-UP] Planilha não configurada. Pulando.")
         return
-    for rotina in (processar_cliques, lembretes_followup):
+    rotinas = [processar_cliques, lembretes_followup]
+    try:
+        from curriculo import gerar_curriculos_pendentes  # importado aqui para evitar import circular
+        rotinas.insert(1, gerar_curriculos_pendentes)       # depois dos cliques, antes do follow-up
+    except Exception as e:
+        print(f"  ⚠️  Currículo adaptado indisponível: {type(e).__name__}: {e}")
+    for rotina in rotinas:
         try:
             rotina(token, chat_id)
         except Exception as e:
