@@ -28,28 +28,31 @@ from datetime import datetime, timezone
 # ====================================================================
 
 GUPY_ENDPOINTS = [
-    "https://employability-portal.gupy.io/api/v1/jobs",
-    "https://portal.api.gupy.io/api/v1/jobs",
+    "https://portal.gupy.io/api/job-search/jobs",        # o que o site usa de verdade
+    "https://employability-portal.gupy.io/api/v1/jobs",  # reserva
 ]
 GUPY_HEADERS = {
     "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                   "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"),
+                   "(KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36"),
     "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "pt-BR,pt;q=0.9",
-    "Origin": "https://portal.gupy.io",
-    "Referer": "https://portal.gupy.io/",
+    "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-origin",
 }
 
 
-def buscar_vagas_gupy(termo: str, limite: int = 10) -> list[dict]:
-    """API pública do portal.gupy.io. Tenta os dois endereços conhecidos e mostra o motivo se falhar."""
+def buscar_vagas_gupy(termo: str, limite: int = 12) -> list[dict]:
+    """Busca pública do portal.gupy.io (sem login, sem cookies). Mostra o motivo se falhar."""
     print(f"\n🔍 [Gupy] Buscando: '{termo}'...")
-    params = {"jobName": termo, "limit": min(limite, 10), "offset": 0}
+    params = {"jobName": termo, "limit": min(limite, 12), "offset": 0}
+    headers = dict(GUPY_HEADERS)
+    headers["Referer"] = "https://portal.gupy.io/job-search/term=" + requests.utils.quote(termo)
     itens = []
     for url in GUPY_ENDPOINTS:
         host = url.split("/")[2]
         try:
-            resp = requests.get(url, params=params, headers=GUPY_HEADERS, timeout=20)
+            resp = requests.get(url, params=params, headers=headers, timeout=20)
             if resp.status_code != 200:
                 trecho = (resp.text or "")[:120].replace("\n", " ")
                 print(f"   ⚠️  Gupy ({host}): HTTP {resp.status_code} | {trecho}")
