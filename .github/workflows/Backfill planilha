@@ -1,0 +1,22 @@
+name: Backfill planilha (manual)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: pip install requests gspread google-auth
+      - name: Gravar vagas já enviadas na planilha
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          SCORE_MIN_PLANILHA: '60'
+        run: python backfill_planilha.py
