@@ -126,8 +126,9 @@ def obter_descricao(vaga: dict) -> str:
             return _greenhouse(m.group(1), m.group(2))[:MAX_DESC]
         if "gupy.io" in link:
             return _gupy(link)[:MAX_DESC]
-        if "programathor.com.br" in link:
-            return _programathor(link)[:MAX_DESC]
+        if "linkedin.com/jobs/view" in link:
+            from linkedin_vagas import descricao_linkedin
+            return descricao_linkedin(link)[:MAX_DESC]
     except Exception as e:
         print(f"     ⚠️  Descrição indisponível ({type(e).__name__}): {str(e)[:80]}")
     return ""
