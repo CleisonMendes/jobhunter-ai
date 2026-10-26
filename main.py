@@ -39,6 +39,7 @@ from funil          import enviar_relatorio_funil
 from saude_fontes   import verificar_e_alertar
 from fontes_extra   import buscar_todas_lever, LEVER_EMPRESAS
 from linkedin_vagas import buscar_vagas_linkedin
+from filtro_local   import filtrar_por_local
 
 
 # ====================================================================
@@ -369,6 +370,10 @@ def main():
     # Recência: só vagas de até 30 dias, prioridade para as dos últimos 7
     with Timer("RECÊNCIA — Filtro de datas"):
         todas_vagas = filtrar_recentes(todas_vagas)
+
+    # Localização: fora de SP, só remotas / home office
+    with Timer("LOCAL — Filtro de localização"):
+        todas_vagas = filtrar_por_local(todas_vagas)
 
     # Fase 2: Filtro
     with Timer("FASE 2 — Filtro"):
