@@ -38,6 +38,7 @@ from telegram_acoes import rotinas_telegram
 from funil          import enviar_relatorio_funil
 from saude_fontes   import verificar_e_alertar
 from fontes_extra   import buscar_todas_lever, LEVER_EMPRESAS
+from linkedin_vagas import buscar_vagas_linkedin
 
 
 # ====================================================================
@@ -156,6 +157,9 @@ def salvar_descartadas(todas_vagas: list[dict], vagas_filtradas: list[dict]) -> 
 TERMOS_GUPY     = ["analista antifraude", "analista chargeback", "prevenção de fraudes",
                    "analista financeiro", "backoffice financeiro", "analista de dados"]
 TERMOS_LINKEDIN = ["antifraude", "chargeback"]
+TERMOS_LINKEDIN_VAGAS = ["analista antifraude", "analista chargeback", "prevenção a fraudes",
+                         "analista de dados", "analista de automação", "desenvolvedor júnior",
+                         "analista financeiro"]
 
 
 def buscar_todas_vagas_paralelo() -> list:
@@ -167,8 +171,9 @@ def buscar_todas_vagas_paralelo() -> list:
     rotinas_telegram(token, chat_id)
 
     todas_vagas = []
-    tarefas = [("gupy", t) for t in TERMOS_GUPY] + [("linkedin_posts", t) for t in TERMOS_LINKEDIN]
-    nomes   = {"gupy": "Gupy", "linkedin_posts": "LinkedIn (posts)"}
+    tarefas = [("gupy", t) for t in TERMOS_GUPY] + [("linkedin_posts", t) for t in TERMOS_LINKEDIN] \
+              + [("linkedin_vagas", t) for t in TERMOS_LINKEDIN_VAGAS]
+    nomes   = {"gupy": "Gupy", "linkedin_posts": "LinkedIn (posts)", "linkedin_vagas": "LinkedIn (vagas)"}
     saude   = {nome: [0, ""] for nome in nomes.values()}   # fonte -> [qtd, erro]
 
     def executar_tarefa(args):
@@ -178,6 +183,8 @@ def buscar_todas_vagas_paralelo() -> list:
                 return fonte, buscar_vagas_gupy(termo), ""
             if fonte == "linkedin_posts":
                 return fonte, buscar_linkedin_posts(termo), ""
+            if fonte == "linkedin_vagas":
+                return fonte, buscar_vagas_linkedin(termo), ""
         except Exception as e:
             print(f"  ⚠️  Erro em {fonte} ({termo}): {e}")
             return fonte, [], f"{type(e).__name__}: {str(e)[:140]}"
@@ -336,7 +343,7 @@ def main():
 
     print("\n" + "=" * 60)
     print("  🤖 RADAR DE VAGAS — Sistema Completo")
-    print("  Gupy · Greenhouse · LinkedIn · Lever · Google Sheets")
+    print("  Gupy · Greenhouse · LinkedIn (posts + vagas) · Lever · Google Sheets")
     print("=" * 60)
 
     # Fase 3: Perfil
