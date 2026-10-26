@@ -37,8 +37,7 @@ from analise_envio  import (calcular_match, exibir_ranking, enviar_para_telegram
 from telegram_acoes import rotinas_telegram
 from funil          import enviar_relatorio_funil
 from saude_fontes   import verificar_e_alertar
-from fontes_extra   import (buscar_todas_lever, LEVER_EMPRESAS,
-                            buscar_todas_programathor, PROGRAMATHOR_ATIVO)
+from fontes_extra   import buscar_todas_lever, LEVER_EMPRESAS
 
 
 # ====================================================================
@@ -181,7 +180,7 @@ def buscar_todas_vagas_paralelo() -> list:
                 return fonte, buscar_linkedin_posts(termo), ""
         except Exception as e:
             print(f"  ⚠️  Erro em {fonte} ({termo}): {e}")
-            return fonte, [], f"{type(e).__name__}: {str(e)[:60]}"
+            return fonte, [], f"{type(e).__name__}: {str(e)[:140]}"
         return fonte, [], ""
 
     with Timer("Buscas paralelas (Gupy + LinkedIn)"):
@@ -206,7 +205,7 @@ def buscar_todas_vagas_paralelo() -> list:
             saude["Greenhouse"][0] = len(achadas)
         except Exception as e:
             print(f"  ⚠️  Erro no Greenhouse: {e}")
-            saude["Greenhouse"][1] = f"{type(e).__name__}: {str(e)[:60]}"
+            saude["Greenhouse"][1] = f"{type(e).__name__}: {str(e)[:140]}"
 
     if LEVER_EMPRESAS:
         with Timer("Lever"):
@@ -217,18 +216,7 @@ def buscar_todas_vagas_paralelo() -> list:
                 saude["Lever"][0] = len(achadas)
             except Exception as e:
                 print(f"  ⚠️  Erro no Lever: {e}")
-                saude["Lever"][1] = f"{type(e).__name__}: {str(e)[:60]}"
-
-    if PROGRAMATHOR_ATIVO:
-        with Timer("ProgramaThor"):
-            saude["ProgramaThor"] = [0, ""]
-            try:
-                achadas = buscar_todas_programathor()
-                todas_vagas.extend(achadas)
-                saude["ProgramaThor"][0] = len(achadas)
-            except Exception as e:
-                print(f"  ⚠️  Erro no ProgramaThor: {e}")
-                saude["ProgramaThor"][1] = f"{type(e).__name__}: {str(e)[:60]}"
+                saude["Lever"][1] = f"{type(e).__name__}: {str(e)[:140]}"
 
     # alerta no Telegram se alguma fonte está quebrada há várias rodadas
     try:
@@ -348,7 +336,7 @@ def main():
 
     print("\n" + "=" * 60)
     print("  🤖 RADAR DE VAGAS — Sistema Completo")
-    print("  Gupy · Greenhouse · LinkedIn · Lever · ProgramaThor · Google Sheets")
+    print("  Gupy · Greenhouse · LinkedIn · Lever · Google Sheets")
     print("=" * 60)
 
     # Fase 3: Perfil
