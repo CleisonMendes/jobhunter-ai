@@ -8,7 +8,7 @@ Variáveis de ambiente (segredos do GitHub):
   SHEET_ID            → ID da planilha (trecho do link entre /d/ e /edit)
   SHEET_ABA           → (opcional) nome da aba, padrão "Vagas"
   SCORE_MIN_PLANILHA  → (opcional) score mínimo para entrar na planilha, padrão 60
-Se GOOGLE_CREDENTIALS ou SHEET_ID não existirem, a planilha é simplesmente ignorada.
+Se GOOGLE_CREDENTIALS ou SHEET_ID não existirem, a planilha é simplesmente ignorada..
 
 v2: a coluna I (Quando me inscrevi) agora nasce vazia e é preenchida pelo botão
     "Me candidatei" do Telegram (telegram_acoes.py).
