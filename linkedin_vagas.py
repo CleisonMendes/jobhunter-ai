@@ -17,7 +17,8 @@ HEADERS = {
     "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
 }
 # f_TPR=r604800 = publicadas nos últimos 7 dias | sortBy=DD = mais recentes primeiro
-PARAMS_BASE = {"location": "Brasil", "f_TPR": "r604800", "sortBy": "DD"}
+# geoId 106057199 = Brasil (fixa o país; só o texto "Brasil" deixava passar vagas de fora)
+PARAMS_BASE = {"location": "Brazil", "geoId": "106057199", "f_TPR": "r604800", "sortBy": "DD"}
 
 
 def _id_da_vaga(link: str) -> str:
