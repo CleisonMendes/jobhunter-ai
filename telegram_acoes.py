@@ -1,15 +1,21 @@
 """
-RADAR DE VAGAS — telegram_acoes.py (NOVO)
+RADAR DE VAGAS — telegram_acoes.py
 
   • enviar_telegram()      → envio (com botões opcionais)
   • botoes_vaga()          → "✅ Me candidatei" / "🗑️ Descartar"
-  • processar_cliques()    → lê os cliques pendentes e atualiza a planilha
+  • processar_cliques()    → lê os cliques e os comprovantes pendentes (prints/e-mails)
+  • validar_comprovantes() → valida por e-mail (Gmail) e encerra pendências fora do prazo
   • lembretes_followup()   → avisa quando passaram FOLLOWUP_DIAS da candidatura
-  • rotinas_telegram()     → roda as duas rotinas acima (chamada a cada rodada)
+  • rotinas_telegram()     → roda as rotinas acima (chamada a cada rodada)
 
 Como funciona sem servidor: o robô roda por agendamento (GitHub Actions), então os
-cliques ficam na fila do Telegram e são processados na próxima rodada. O Telegram
-descarta os cliques já confirmados (offset), então não precisa guardar nada no banco.
+cliques e as mensagens ficam na fila do Telegram e são processados na próxima rodada.
+O Telegram descarta os itens já confirmados (offset), então não precisa guardar nada no banco.
+
+VALIDAÇÃO DE CANDIDATURA:
+  "✅ Me candidatei" NÃO grava mais a data na planilha. Ele pede o comprovante
+  (print ou e-mail de confirmação). A data de inscrição (coluna I) só entra depois
+  que o comprovante for validado (veja validacao.py).
 
 Variáveis opcionais:
   STATUS_CANDIDATEI  → texto da coluna Status ao candidatar   (padrão "Em andamento")
@@ -26,6 +32,7 @@ import requests
 from datetime import datetime
 
 from integracoes import _abrir_aba, PRIMEIRA_LINHA_DADOS
+from validacao import iniciar_validacao, processar_update as processar_comprovante
 
 STATUS_CANDIDATEI = os.environ.get("STATUS_CANDIDATEI", "Em andamento")
 STATUS_DESCARTADA = os.environ.get("STATUS_DESCARTADA", "Descartada")
@@ -124,7 +131,7 @@ def _planilha():
 
 
 # ====================================================================
-# ── CLIQUES DOS BOTÕES ───────────────────────────────────────────────
+# ── CLIQUES DOS BOTÕES E COMPROVANTES ────────────────────────────────
 # ====================================================================
 
 def _responder(base: str, callback_id: str, texto: str) -> None:
@@ -146,25 +153,26 @@ def _trocar_botoes(base: str, chat_id: str, message_id, rotulo: str, teclado=Non
 
 
 def processar_cliques(token: str, chat_id: str) -> None:
-    print("\n[BOTÕES] Verificando cliques pendentes no Telegram...")
+    print("\n[BOTÕES] Verificando cliques e comprovantes pendentes no Telegram...")
     if not token or not chat_id:
         print("  ⚠️  Telegram não configurado.")
         return
     base = f"https://api.telegram.org/bot{token}"
     try:
+        # "message" entra na lista para chegarem os prints/e-mails enviados como comprovante
         r = requests.get(f"{base}/getUpdates", timeout=20, params={
-            "timeout": 0, "allowed_updates": json.dumps(["callback_query"])})
+            "timeout": 0, "allowed_updates": json.dumps(["callback_query", "message"])})
         updates = r.json().get("result") or []
     except Exception as e:
         print(f"  ⚠️  Não consegui ler os cliques: {e}")
         return
     if not updates:
-        print("  📭 Nenhum clique pendente.")
+        print("  📭 Nenhum clique ou comprovante pendente.")
         return
 
     aba = _planilha()
     if aba is None:
-        print("  ⚠️  Sem planilha: os cliques continuam na fila e serão processados depois.")
+        print("  ⚠️  Sem planilha: os itens continuam na fila e serão processados depois.")
         return
 
     col_link = aba.col_values(C_LINK)
@@ -173,11 +181,20 @@ def processar_cliques(token: str, chat_id: str) -> None:
         if i >= PRIMEIRA_LINHA_DADOS and link.strip():
             linhas.setdefault(hash_link(link), i)
 
-    hoje = datetime.now().strftime("%d/%m/%Y")
-    maior, houve_erro, feitos = 0, False, 0
+    maior, houve_erro, feitos, comprovantes = 0, False, 0, 0
 
     for up in updates:
         maior = max(maior, up.get("update_id", 0))
+
+        # ── Mensagem com comprovante (print, PDF ou texto do e-mail) ──
+        if up.get("message"):
+            try:
+                if processar_comprovante(up):
+                    comprovantes += 1
+            except Exception as e:
+                print(f"  ⚠️  Erro ao processar comprovante: {type(e).__name__}: {e}")
+            continue
+
         cq = up.get("callback_query") or {}
         msg = cq.get("message") or {}
         if str((msg.get("chat") or {}).get("id")) != str(chat_id):
@@ -192,15 +209,17 @@ def processar_cliques(token: str, chat_id: str) -> None:
             continue
         try:
             if acao == "c":
-                dados = [
-                    {"range": f"J{linha}", "values": [["Inscrição"]]},
-                    {"range": f"N{linha}", "values": [[STATUS_CANDIDATEI]]},
-                ]
-                if not (aba.cell(linha, C_DATA).value or "").strip():  # não sobrescreve data
-                    dados.append({"range": f"I{linha}", "values": [[hoje]]})
-                aba.batch_update(dados, value_input_option="USER_ENTERED")
-                _responder(base, cq["id"], "Candidatura registrada na planilha ✅")
-                _trocar_botoes(base, chat_id, msg.get("message_id"), "✅ Candidatura registrada")
+                # Não grava a data aqui: só pede o comprovante.
+                # A data (coluna I) entra quando o comprovante for validado.
+                dados_linha = aba.row_values(linha)
+                dados_linha += [""] * (C_EMPRESA - len(dados_linha))
+                iniciar_validacao(
+                    link=dados_linha[C_LINK - 1].strip(),
+                    titulo=dados_linha[C_TITULO - 1],
+                    empresa=dados_linha[C_EMPRESA - 1],
+                )
+                _responder(base, cq["id"], "Agora envie o comprovante 📎")
+                _trocar_botoes(base, chat_id, msg.get("message_id"), "📎 Aguardando comprovante")
             elif acao == "g":
                 aba.batch_update(
                     [{"range": f"L{linha}", "values": [[PENDENTE_CURRICULO]]}],
@@ -225,7 +244,20 @@ def processar_cliques(token: str, chat_id: str) -> None:
             requests.get(f"{base}/getUpdates", params={"offset": maior + 1, "timeout": 0}, timeout=15)
         except Exception:
             pass
-    print(f"  ✅ {feitos} clique(s) aplicado(s) na planilha.")
+    print(f"  ✅ {feitos} clique(s) aplicado(s) e {comprovantes} comprovante(s) processado(s).")
+
+
+# ====================================================================
+# ── VALIDAÇÃO: GMAIL + PRAZO ─────────────────────────────────────────
+# ====================================================================
+
+def validar_comprovantes(token: str, chat_id: str) -> None:
+    """Procura o e-mail de confirmação no Gmail (se configurado) e encerra as pendências
+    que passaram do prazo."""
+    from validacao import verificar_emails_pendentes, expirar_pendentes
+    print("\n[VALIDAÇÃO] Conferindo comprovantes pendentes...")
+    verificar_emails_pendentes()
+    expirar_pendentes()
 
 
 # ====================================================================
@@ -316,10 +348,10 @@ def rotinas_telegram(token: str, chat_id: str) -> None:
     if not planilha_configurada():
         print("\n[BOTÕES/FOLLOW-UP] Planilha não configurada. Pulando.")
         return
-    rotinas = [processar_cliques, lembretes_followup]
+    rotinas = [processar_cliques, validar_comprovantes, lembretes_followup]
     try:
         from curriculo import gerar_curriculos_pendentes  # importado aqui para evitar import circular
-        rotinas.insert(1, gerar_curriculos_pendentes)       # depois dos cliques, antes do follow-up
+        rotinas.insert(1, gerar_curriculos_pendentes)       # depois dos cliques, antes da validação
     except Exception as e:
         print(f"  ⚠️  Currículo adaptado indisponível: {type(e).__name__}: {e}")
     for rotina in rotinas:
@@ -329,5 +361,5 @@ def rotinas_telegram(token: str, chat_id: str) -> None:
             print(f"  ⚠️  {rotina.__name__} falhou: {type(e).__name__}: {e}")
 
 
-if __name__ == "__main__":  # python telegram_acoes.py  → só processa cliques e lembretes
+if __name__ == "__main__":  # python telegram_acoes.py  → só processa cliques, comprovantes e lembretes
     rotinas_telegram(os.environ.get("TELEGRAM_TOKEN"), os.environ.get("TELEGRAM_CHAT_ID"))
