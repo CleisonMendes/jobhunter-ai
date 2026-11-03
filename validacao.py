@@ -2,7 +2,7 @@
 ==============================================
   RADAR DE VAGAS — validacao.py
   Validação de candidatura por COMPROVANTE
-  (print da candidatura OU e-mail de confirmação)
+  (print da candidatura OU e-mail da empresa)
 ==============================================
 Fluxo:
   1. Você clica em "Me candidatei" no Telegram  →  o handler chama
@@ -10,17 +10,21 @@ Fluxo:
      A vaga fica "⏳ Aguardando comprovação" e o bot pede o comprovante.
   2. Você RESPONDE à mensagem do bot com:
        • um print (imagem) da tela de confirmação / "minhas candidaturas", ou
-       • o e-mail de confirmação (cole o texto, ou envie PDF/print do e-mail).
-     A IA confere se o material realmente comprova uma candidatura ENVIADA
-     para aquela empresa/vaga. Também rejeita o mesmo arquivo reaproveitado
-     em outra vaga (hash SHA-256).
+       • o e-mail da empresa (cole o texto, ou envie PDF/print do e-mail).
+     A IA classifica o material e só aceita se ele provar que a candidatura
+     existe para AQUELA vaga:
+       ✅ candidatura_enviada   → "recebemos sua candidatura", "agradecemos por se candidatar"
+       ✅ retorno_do_processo   → avanço de fase, testes, entrevista, ou encerramento da vaga
+       ❌ cadastro_conta, ativacao_pendente, vaga_ou_formulario, ilegivel, outro
+     Também rejeita o mesmo arquivo reaproveitado em outra vaga (hash SHA-256).
   3. Em paralelo, se o Gmail estiver configurado, o robô procura sozinho o
-     e-mail de confirmação da empresa e valida a vaga.
+     e-mail da empresa e valida a vaga.
   4. Passou do prazo sem comprovante → "⚠️ Sem comprovante".
+  5. Só quando validada, a data de inscrição (coluna I) é preenchida.
 
-Planilha "Gestão de Vagas" — crie 2 colunas novas:
-  Q = Status da validação      R = Comprovante
-  (proteja Q:R no Google Sheets para só a conta de serviço escrever)
+Planilha "Gestão de Vagas":
+  P = Status da validação      Q = Comprovante
+  (proteja P:Q no Google Sheets para só a conta de serviço escrever)
 
 Variáveis de ambiente:
   TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, GEMINI_API_KEY, GOOGLE_CREDENTIALS, SHEET_ID  (já existentes)
@@ -28,11 +32,10 @@ Variáveis de ambiente:
   Opcionais (validação automática pelo Gmail, escopo gmail.readonly):
   GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN
 
-Como ligar ao que você já tem:
-  • No handler do botão "Me candidatei":      iniciar_validacao(link, titulo, empresa)
-  • No loop que já lê os updates do Telegram: processar_update(update)
-    (se NENHUM código seu lê getUpdates, rode:  python validacao.py --polling)
-  • Em toda rodada do robô:                    python validacao.py
+Ligações (já feitas no telegram_acoes.py):
+  • botão "Me candidatei"                →  iniciar_validacao(link, titulo, empresa)
+  • mensagens recebidas no Telegram      →  processar_update(update)
+  • a cada rodada                        →  verificar_emails_pendentes() e expirar_pendentes()
 """
 
 import os
@@ -65,6 +68,10 @@ HORAS_PRAZO  = int(os.environ.get("VALIDACAO_PRAZO_HORAS", "48"))
 COL_LINK     = 3                      # C
 PENDENTES    = ("aguardando", "recusada")
 
+# Tipos de material que a IA pode devolver e que PROVAM a candidatura.
+# Para aceitar só confirmações de envio, deixe apenas "candidatura_enviada".
+TIPOS_VALIDOS = ("candidatura_enviada", "retorno_do_processo")
+
 STATUS_TXT = {
     "aguardando": "⏳ Aguardando comprovação",
     "print":      "✅ Validada (print)",
@@ -73,7 +80,11 @@ STATUS_TXT = {
     "expirada":   "⚠️ Sem comprovante",
 }
 
-CONFIRMACAO = r"candidatura|application|inscri[cç][aã]o|recebemos|thank you for applying|obrigad"
+# Assuntos/trechos de e-mails da empresa que indicam candidatura ou andamento do processo
+CONFIRMACAO = (r"recebemos (a )?sua candidatura|candidatura (enviada|recebida|realizada)|"
+               r"application (received|submitted)|we received your application|thank you for applying|"
+               r"agradecemos por se candidatar|obrigad[oa] por se candidatar|"
+               r"pr[oó]xima fase|processo seletivo|vaga finalizada|n[aã]o daremos continuidade")
 
 
 def _agora() -> str:
@@ -156,6 +167,11 @@ def _atualizar_planilha(link: str, status: str, comprovante: str = "") -> None:
             if i >= PRIMEIRA_LINHA_DADOS and valor.strip() == link.strip():
                 aba.update(range_name=f"P{i}:Q{i}",
                            values=[[STATUS_TXT[status], comprovante]])
+                # Data de inscrição só entra depois de comprovada
+                if status in ("print", "email"):
+                    aba.update(range_name=f"I{i}",
+                               values=[[datetime.now().strftime("%d/%m/%Y")]],
+                               value_input_option="USER_ENTERED")
                 return
         print("  ⚠️  Vaga não encontrada na planilha para atualizar a validação.")
     except Exception as e:
@@ -163,7 +179,7 @@ def _atualizar_planilha(link: str, status: str, comprovante: str = "") -> None:
 
 
 # ====================================================================
-# ── IA: CONFERE SE O MATERIAL REALMENTE COMPROVA ─────────────────────
+# ── IA: CLASSIFICA O MATERIAL E CONFERE SE COMPROVA ──────────────────
 # ====================================================================
 
 def _analisar_comprovante(conteudo, mime: str, titulo: str, empresa: str) -> dict:
@@ -173,18 +189,40 @@ def _analisar_comprovante(conteudo, mime: str, titulo: str, empresa: str) -> dic
     if not api_key:
         return {"comprova": None, "motivo": "GEMINI_API_KEY ausente"}
 
+    motivos = {
+        "cadastro_conta":     "É confirmação de cadastro/conta, não de candidatura enviada.",
+        "ativacao_pendente":  "A candidatura ainda precisa ser ativada ou concluída.",
+        "vaga_ou_formulario": "É a página da vaga ou um formulário, sem candidatura enviada.",
+        "ilegivel":           "Material ilegível, cortado ou com sinais de edição.",
+        "outro":              "O material não trata de uma candidatura sua a essa vaga.",
+    }
+
     prompt = f"""Você valida comprovantes de candidatura a vagas de emprego.
 Vaga esperada: "{titulo}" na empresa "{empresa}".
 
-Analise o material e responda APENAS com um JSON válido:
-{{"comprova": true, "empresa_visivel": "", "vaga_visivel": "", "data_visivel": "", "motivo": "frase curta"}}
+Classifique o material e responda APENAS com um JSON válido:
+{{"tipo": "candidatura_enviada", "corresponde_vaga": true, "empresa_visivel": "", "vaga_visivel": "", "data_visivel": "", "motivo": "frase curta"}}
 
-Regras:
-- "comprova" só é true se o material mostrar claramente uma candidatura ENVIADA ou RECEBIDA
-  (tela de confirmação, e-mail de confirmação ou lista de 'minhas candidaturas')
-  E a empresa OU o cargo corresponderem à vaga esperada.
-- Página da vaga, formulário em branco ou botão 'Candidatar-se' NÃO comprovam.
-- Material ilegível, cortado demais ou com sinais de edição: false."""
+Valores permitidos para "tipo":
+- "candidatura_enviada": o material afirma de forma explícita que a candidatura a uma vaga
+  foi ENVIADA ou RECEBIDA (ex.: "recebemos sua candidatura", "agradecemos por se candidatar",
+  "application received", ou a vaga listada em 'minhas candidaturas' com status de candidatura).
+- "retorno_do_processo": mensagem da empresa sobre o processo seletivo DO CANDIDATO nessa vaga:
+  avanço de fase, testes ou entrevista agendada, ou encerramento da vaga / retorno negativo
+  ("não daremos continuidade ao seu processo"). Prova que a candidatura existiu.
+- "cadastro_conta": confirmação de cadastro, criação de conta, verificação de e-mail ou login.
+- "ativacao_pendente": pede para o candidato concluir, ativar ou completar a candidatura.
+- "vaga_ou_formulario": página da vaga, formulário em branco ou botão 'Candidatar-se'.
+- "ilegivel": ilegível, cortado demais ou com sinais de edição.
+- "outro": newsletter, alerta de vagas, propaganda ou qualquer e-mail que não trate da
+  candidatura ou do processo do candidato.
+
+Seja rigoroso: se houver qualquer sinal de que a candidatura ainda precisa ser ativada,
+concluída ou confirmada pelo candidato, NÃO use "candidatura_enviada".
+
+"corresponde_vaga": true somente se a empresa OU o cargo do material corresponderem à vaga esperada.
+Quando o e-mail vem de uma plataforma de recrutamento (inHire, Gupy, Greenhouse, Lever etc.),
+a empresa pode não aparecer no texto: nesse caso confira o cargo e o remetente."""
 
     if isinstance(conteudo, bytes):
         partes = [types.Part.from_bytes(data=conteudo, mime_type=mime), prompt]
@@ -197,10 +235,22 @@ Regras:
         achado = re.search(r"\{.*\}", resp.text or "", re.DOTALL)
         if not achado:
             return {"comprova": None, "motivo": "resposta da IA inválida"}
-        return json.loads(achado.group(0))
+        analise = json.loads(achado.group(0))
     except Exception as e:
         print(f"  ⚠️  IA indisponível: {str(e)[:80]}")
         return {"comprova": None, "motivo": "IA indisponível"}
+
+    tipo = analise.get("tipo")
+    corresponde = bool(analise.get("corresponde_vaga"))
+    analise["comprova"] = (tipo in TIPOS_VALIDOS) and corresponde
+
+    if not analise["comprova"]:
+        if tipo in TIPOS_VALIDOS:
+            analise["motivo"] = "O comprovante parece ser de outra vaga ou empresa."
+        else:
+            analise["motivo"] = (motivos.get(tipo) or analise.get("motivo")
+                                 or "Não comprova uma candidatura enviada.")
+    return analise
 
 
 # ====================================================================
@@ -218,7 +268,7 @@ def iniciar_validacao(link: str, titulo: str, empresa: str) -> None:
     msg_id = _enviar(
         f"📎 Comprovante pendente\n{titulo} — {empresa}\n\n"
         "Responda a ESTA mensagem com o print da candidatura (tela de confirmação) "
-        "ou com o e-mail de confirmação (cole o texto, PDF ou print).\n"
+        "ou com o e-mail da empresa (cole o texto, PDF ou print).\n"
         f"Prazo: {HORAS_PRAZO}h."
     )
     conn.execute("""INSERT OR REPLACE INTO validacoes
@@ -329,7 +379,8 @@ def processar_update(update: dict) -> bool:
                         WHERE link=?""",
                      (metodo, metodo, digest, _agora(), arquivo, link))
         conn.commit()
-        comprovante = f"{metodo} · {datetime.utcnow():%d/%m/%Y} · sha:{digest[:10]}"
+        comprovante = (f"{metodo} · {datetime.utcnow():%d/%m/%Y} · "
+                       f"{analise.get('tipo', '')} · sha:{digest[:10]}")
         _atualizar_planilha(link, metodo, comprovante)
         _enviar(f"✅ Candidatura validada ({metodo})!\n{titulo} — {empresa}", msg_id)
         return True
@@ -339,7 +390,8 @@ def processar_update(update: dict) -> bool:
 
 def coletar_updates() -> None:
     """Modo --polling: lê as mensagens novas do Telegram.
-    Use SÓ se nenhum outro código seu consome getUpdates (o offset é confirmado aqui)."""
+    Use SÓ se nenhum outro código seu consome getUpdates (o offset é confirmado aqui).
+    Com o telegram_acoes.py ligado, NÃO use."""
     conn = _db()
     linha = conn.execute("SELECT v FROM kv WHERE k = 'offset'").fetchone()
     offset = int(linha[0]) if linha else 0
@@ -376,10 +428,11 @@ def _buscar_email(token: str, empresa: str, titulo: str):
         return None
     cab = {"Authorization": f"Bearer {token}"}
     base = "https://gmail.googleapis.com/gmail/v1/users/me/messages"
-    q = (f'newer_than:14d "{termo}" '
-         '(candidatura OR application OR inscrição OR "thank you for applying")')
+    q = (f'newer_than:30d "{termo}" '
+         '(candidatura OR application OR inscrição OR processo OR "próxima fase" '
+         'OR "thank you for applying")')
     try:
-        r = requests.get(base, headers=cab, params={"q": q, "maxResults": 5}, timeout=20)
+        r = requests.get(base, headers=cab, params={"q": q, "maxResults": 8}, timeout=20)
         if not r.ok:
             return None
         for item in r.json().get("messages", []):
@@ -418,7 +471,7 @@ def verificar_emails_pendentes() -> None:
                         WHERE link=?""", (_agora(), f"{achou['assunto']} | {achou['de']}", link))
         conn.commit()
         _atualizar_planilha(link, "email", comprovante)
-        _enviar(f"✅ Validada automaticamente pelo e-mail de confirmação:\n{titulo} — {empresa}")
+        _enviar(f"✅ Validada automaticamente pelo e-mail da empresa:\n{titulo} — {empresa}")
         print(f"  ✅ Gmail validou: {titulo[:40]}")
     conn.close()
 
