@@ -3,7 +3,9 @@ name: Radar de Vagas Automacao
 on:
   schedule:
     # Executa automaticamente no minuto 0 a cada 2 horas
-    - cron: '0 */2 * * *'
+    #- cron: '0 */2  * * *'  
+    # Executa automaticamente no minuto 0 a cada 5 horas
+    - cron: '0 */5  * * *'
   workflow_dispatch: # Botão para executar manualmente quando quiser
 
 jobs:
