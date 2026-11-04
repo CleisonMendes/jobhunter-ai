@@ -5,7 +5,11 @@ on:
     # Executa automaticamente no minuto 0 a cada 2 horas
     #- cron: '0 */2  * * *'  
     # Executa automaticamente no minuto 0 a cada 5 horas
-    - cron: '0 */5  * * *'
+    #- cron: '0 */5  * * *'  
+    
+    # Roda às 10h, 15h e 20h (horário de Brasília)
+    # O GitHub usa UTC (3h à frente): 13h, 18h e 23h UTC
+    - cron: '0 13,18,23 * * *'
   workflow_dispatch: # Botão para executar manualmente quando quiser
 
 jobs:
