@@ -1,7 +1,10 @@
 name: Cliques do Telegram (opcional)
 
-# Processa só os botões "Me candidatei" / "Descartar" e atualiza a planilha.
-# Não busca vagas, não usa o Gemini e não mexe no banco (nada para commitar).
+# Processa os botões "Me candidatei" / "Descartar" / "Gerar currículo" e os COMPROVANTES
+# de candidatura (print ou e-mail) enviados ao bot, e atualiza a planilha.
+# Não busca vagas e não mexe no banco (nada para commitar): o estado da validação
+# fica na própria planilha (colunas P, Q e R).
+# Usa o Gemini só para conferir os comprovantes.
 # Em repositório PRIVADO, cada execução consome minutos do plano gratuito:
 # a cada 15 min dá ~2.900 min/mês; de hora em hora, ~720 min/mês.
 
@@ -30,14 +33,16 @@ jobs:
           python-version: '3.12'
           cache: 'pip'
 
+      # google-genai: o telegram_acoes.py importa o validacao.py, que usa o Gemini
       - name: Instalar dependências
-        run: pip install requests gspread google-auth
+        run: pip install requests gspread google-auth google-genai
 
-      - name: Processar cliques
+      - name: Processar cliques e comprovantes
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
           SHEET_ID: ${{ secrets.SHEET_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           python -c "import os; from telegram_acoes import processar_cliques; processar_cliques(os.environ['TELEGRAM_TOKEN'], os.environ['TELEGRAM_CHAT_ID'])"
