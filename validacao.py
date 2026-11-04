@@ -4,8 +4,11 @@
   Validação de candidatura por COMPROVANTE
   (print da candidatura OU e-mail da empresa)
 ==============================================
+Todo o estado da validação fica NA PLANILHA (nada de banco SQLite), então funciona
+em qualquer workflow do GitHub Actions, mesmo os que não salvam o banco.
+
 Fluxo:
-  1. Você clica em "Me candidatei" no Telegram  →  o handler chama
+  1. Você clica em "Me candidatei" no Telegram  →  o telegram_acoes.py chama
      iniciar_validacao(link, titulo, empresa).
      A vaga fica "⏳ Aguardando comprovação" e o bot pede o comprovante.
   2. Você RESPONDE à mensagem do bot com:
@@ -16,23 +19,28 @@ Fluxo:
        ✅ candidatura_enviada   → "recebemos sua candidatura", "agradecemos por se candidatar"
        ✅ retorno_do_processo   → avanço de fase, testes, entrevista, ou encerramento da vaga
        ❌ cadastro_conta, ativacao_pendente, vaga_ou_formulario, ilegivel, outro
-     Também rejeita o mesmo arquivo reaproveitado em outra vaga (hash SHA-256).
+     Também rejeita o mesmo comprovante reaproveitado em outra vaga (hash SHA-256).
   3. Em paralelo, se o Gmail estiver configurado, o robô procura sozinho o
      e-mail da empresa e valida a vaga.
   4. Passou do prazo sem comprovante → "⚠️ Sem comprovante".
   5. Só quando validada, a data de inscrição (coluna I) é preenchida.
 
 Planilha "Gestão de Vagas":
-  P = Status da validação      Q = Comprovante
-  (proteja P:Q no Google Sheets para só a conta de serviço escrever)
+  P = Status da validação
+  Q = Comprovante (método · data · tipo · hash)
+  R = Controle (uso interno: "id da mensagem do bot|data do pedido") → NÃO EDITE; pode ocultar a coluna
+  (proteja P:R no Google Sheets para só a conta de serviço escrever)
+
+O arquivo do print não é guardado no servidor: o comprovante continua na conversa do
+Telegram e a planilha guarda o hash dele.
 
 Variáveis de ambiente:
-  TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, GEMINI_API_KEY, GOOGLE_CREDENTIALS, SHEET_ID  (já existentes)
+  TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, GEMINI_API_KEY, GOOGLE_CREDENTIALS, SHEET_ID
   VALIDACAO_PRAZO_HORAS   prazo para enviar o comprovante (padrão 48)
   Opcionais (validação automática pelo Gmail, escopo gmail.readonly):
   GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN
 
-Ligações (já feitas no telegram_acoes.py):
+Ligações (feitas no telegram_acoes.py):
   • botão "Me candidatei"                →  iniciar_validacao(link, titulo, empresa)
   • mensagens recebidas no Telegram      →  processar_update(update)
   • a cada rodada                        →  verificar_emails_pendentes() e expirar_pendentes()
@@ -42,9 +50,7 @@ import os
 import re
 import sys
 import json
-import sqlite3
 import hashlib
-import argparse
 import requests
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -61,12 +67,13 @@ from integracoes import _abrir_aba, _normalizar, PRIMEIRA_LINHA_DADOS
 # ── CONFIGURAÇÃO ─────────────────────────────────────────────────────
 # ====================================================================
 
-DB           = "vagas_enviadas.db"
-PASTA        = Path("comprovantes")
 MODELO       = "gemini-2.5-flash"
 HORAS_PRAZO  = int(os.environ.get("VALIDACAO_PRAZO_HORAS", "48"))
-COL_LINK     = 3                      # C
 PENDENTES    = ("aguardando", "recusada")
+
+# Colunas da planilha (A = 1)
+COL_TITULO, COL_LINK, COL_EMPRESA = 2, 3, 4      # B, C, D
+COL_STATUS, COL_COMPROVANTE, COL_CONTROLE = 16, 17, 18   # P, Q, R
 
 # Tipos de material que a IA pode devolver e que PROVAM a candidatura.
 # Para aceitar só confirmações de envio, deixe apenas "candidatura_enviada".
@@ -79,6 +86,7 @@ STATUS_TXT = {
     "recusada":   "❌ Comprovante recusado",
     "expirada":   "⚠️ Sem comprovante",
 }
+ROTULO_CHAVE = {texto: chave for chave, texto in STATUS_TXT.items()}
 
 # Assuntos/trechos de e-mails da empresa que indicam candidatura ou andamento do processo
 CONFIRMACAO = (r"recebemos (a )?sua candidatura|candidatura (enviada|recebida|realizada)|"
@@ -91,29 +99,9 @@ def _agora() -> str:
     return datetime.utcnow().isoformat(timespec="seconds")
 
 
-# ====================================================================
-# ── BANCO ────────────────────────────────────────────────────────────
-# ====================================================================
-
-def _db() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS validacoes (
-            link        TEXT PRIMARY KEY,
-            titulo      TEXT,
-            empresa     TEXT,
-            status      TEXT DEFAULT 'aguardando',
-            metodo      TEXT,
-            hash        TEXT,
-            msg_id      INTEGER,
-            criada_em   TEXT,
-            validada_em TEXT,
-            detalhe     TEXT
-        )
-    """)
-    conn.execute("CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT)")
-    conn.commit()
-    return conn
+def _hoje_br() -> str:
+    """Data de hoje no horário de Brasília (o GitHub Actions roda em UTC)."""
+    return (datetime.utcnow() - timedelta(hours=3)).strftime("%d/%m/%Y")
 
 
 # ====================================================================
@@ -155,27 +143,54 @@ def _baixar(file_id: str):
 
 
 # ====================================================================
-# ── PLANILHA ─────────────────────────────────────────────────────────
+# ── PLANILHA (É AQUI QUE FICA O ESTADO) ──────────────────────────────
 # ====================================================================
 
-def _atualizar_planilha(link: str, status: str, comprovante: str = "") -> None:
+def _aba_ou_none():
     try:
-        aba = _abrir_aba()
-        if aba is None:
-            return
-        for i, valor in enumerate(aba.col_values(COL_LINK), start=1):
-            if i >= PRIMEIRA_LINHA_DADOS and valor.strip() == link.strip():
-                aba.update(range_name=f"P{i}:Q{i}",
-                           values=[[STATUS_TXT[status], comprovante]])
-                # Data de inscrição só entra depois de comprovada
-                if status in ("print", "email"):
-                    aba.update(range_name=f"I{i}",
-                               values=[[datetime.now().strftime("%d/%m/%Y")]],
-                               value_input_option="USER_ENTERED")
-                return
-        print("  ⚠️  Vaga não encontrada na planilha para atualizar a validação.")
+        return _abrir_aba()
     except Exception as e:
-        print(f"  ❌ Erro ao atualizar a planilha: {e}")
+        print(f"  ❌ Não foi possível abrir a planilha: {e}")
+        return None
+
+
+def _celula(linha: list, col: int) -> str:
+    return linha[col - 1].strip() if len(linha) >= col else ""
+
+
+def _ler_linhas(aba) -> list:
+    """Lê as vagas da planilha com o estado da validação (colunas P, Q e R)."""
+    valores = aba.get_all_values()
+    saida = []
+    for n in range(PRIMEIRA_LINHA_DADOS, len(valores) + 1):
+        l = valores[n - 1]
+        link = _celula(l, COL_LINK)
+        if not link:
+            continue
+        saida.append({
+            "linha":       n,
+            "link":        link,
+            "titulo":      _celula(l, COL_TITULO),
+            "empresa":     _celula(l, COL_EMPRESA),
+            "status":      ROTULO_CHAVE.get(_celula(l, COL_STATUS), ""),
+            "comprovante": _celula(l, COL_COMPROVANTE),
+            "controle":    _celula(l, COL_CONTROLE),
+        })
+    return saida
+
+
+def _gravar(aba, linha: int, status: str, comprovante: str = "",
+            controle: str = None, data: bool = False) -> None:
+    """Atualiza P e Q (e R, se informado). Com data=True, preenche a coluna I (inscrição)."""
+    dados = [{"range": f"P{linha}:Q{linha}", "values": [[STATUS_TXT[status], comprovante]]}]
+    if controle is not None:
+        dados.append({"range": f"R{linha}", "values": [[controle]]})
+    if data:
+        dados.append({"range": f"I{linha}", "values": [[_hoje_br()]]})
+    try:
+        aba.batch_update(dados, value_input_option="USER_ENTERED")
+    except Exception as e:
+        print(f"  ❌ Erro ao atualizar a planilha (linha {linha}): {e}")
 
 
 # ====================================================================
@@ -259,11 +274,15 @@ a empresa pode não aparecer no texto: nesse caso confira o cargo e o remetente.
 
 def iniciar_validacao(link: str, titulo: str, empresa: str) -> None:
     """Chame no handler do botão 'Me candidatei'."""
-    conn = _db()
-    ja = conn.execute("SELECT status FROM validacoes WHERE link = ?", (link,)).fetchone()
-    if ja and ja[0] in ("print", "email"):
-        conn.close()
+    aba = _aba_ou_none()
+    if aba is None:
         return
+    alvo = next((x for x in _ler_linhas(aba) if x["link"].strip() == link.strip()), None)
+    if alvo is None:
+        print("  ⚠️  Vaga não encontrada na planilha para iniciar a validação.")
+        return
+    if alvo["status"] in ("print", "email"):
+        return  # já validada
 
     msg_id = _enviar(
         f"📎 Comprovante pendente\n{titulo} — {empresa}\n\n"
@@ -271,40 +290,22 @@ def iniciar_validacao(link: str, titulo: str, empresa: str) -> None:
         "ou com o e-mail da empresa (cole o texto, PDF ou print).\n"
         f"Prazo: {HORAS_PRAZO}h."
     )
-    conn.execute("""INSERT OR REPLACE INTO validacoes
-                    (link, titulo, empresa, status, msg_id, criada_em)
-                    VALUES (?, ?, ?, 'aguardando', ?, ?)""",
-                 (link, titulo, empresa, msg_id, _agora()))
-    conn.commit()
-    conn.close()
-    _atualizar_planilha(link, "aguardando")
+    _gravar(aba, alvo["linha"], "aguardando", "", controle=f"{msg_id}|{_agora()}")
 
 
 # ====================================================================
 # ── PASSO 2: RECEBE O COMPROVANTE PELO TELEGRAM ──────────────────────
 # ====================================================================
 
-def _vaga_alvo(conn, msg: dict):
+def _vaga_alvo(linhas: list, msg: dict):
     """Descobre a qual vaga o comprovante pertence."""
     resp_a = (msg.get("reply_to_message") or {}).get("message_id")
     if resp_a:
-        linha = conn.execute("SELECT link, titulo, empresa FROM validacoes WHERE msg_id = ?",
-                             (resp_a,)).fetchone()
-        if linha:
-            return linha
-    marcas = ",".join("?" * len(PENDENTES))
-    pend = conn.execute(f"SELECT link, titulo, empresa FROM validacoes WHERE status IN ({marcas})",
-                        PENDENTES).fetchall()
+        for x in linhas:
+            if x["controle"].split("|")[0] == str(resp_a):
+                return x
+    pend = [x for x in linhas if x["status"] in PENDENTES]
     return pend[0] if len(pend) == 1 else None
-
-
-def _salvar_arquivo(link: str, dados, mime: str) -> str:
-    PASTA.mkdir(exist_ok=True)
-    ext = {"image/jpeg": ".jpg", "image/png": ".png", "application/pdf": ".pdf"}.get(mime, ".txt")
-    slug = re.sub(r"\W+", "-", link)[-40:].strip("-")
-    caminho = PASTA / f"{datetime.utcnow():%Y%m%d}_{slug}{ext}"
-    caminho.write_bytes(dados if isinstance(dados, bytes) else dados.encode())
-    return str(caminho)
 
 
 def processar_update(update: dict) -> bool:
@@ -320,88 +321,65 @@ def processar_update(update: dict) -> bool:
         return False
 
     msg_id = msg["message_id"]
-    conn = _db()
-    try:
-        alvo = _vaga_alvo(conn, msg)
-        if not alvo:
-            _enviar("Não sei a qual vaga esse comprovante pertence. Responda diretamente à "
-                    "mensagem '📎 Comprovante pendente' da vaga.", msg_id)
-            return True
-        link, titulo, empresa = alvo
-
-        # ── Obtém o conteúdo ──
-        if foto or doc:
-            if foto:
-                file_id, mime = foto[-1]["file_id"], "image/jpeg"
-            else:
-                mime = doc.get("mime_type", "")
-                if not (mime.startswith("image/") or mime == "application/pdf"):
-                    _enviar("Formato não aceito. Envie imagem, PDF ou cole o texto do e-mail.", msg_id)
-                    return True
-                file_id = doc["file_id"]
-            conteudo = _baixar(file_id)
-            if not conteudo:
-                _enviar("Não consegui baixar o arquivo. Tente enviar de novo.", msg_id)
-                return True
-        else:
-            conteudo, mime = texto, "text/plain"
-
-        # ── Anti-reaproveitamento ──
-        bruto = conteudo if isinstance(conteudo, bytes) else conteudo.encode()
-        digest = hashlib.sha256(bruto).hexdigest()
-        outro = conn.execute("SELECT titulo FROM validacoes WHERE hash = ? AND link <> ?",
-                             (digest, link)).fetchone()
-        if outro:
-            _enviar(f"❌ Esse comprovante já foi usado na vaga '{outro[0]}'. "
-                    "Cada candidatura precisa do seu próprio comprovante.", msg_id)
-            return True
-
-        # ── IA confere ──
-        analise = _analisar_comprovante(conteudo, mime, titulo, empresa)
-        if analise.get("comprova") is None:
-            _enviar("⚠️ Não consegui analisar agora. Reenvie o comprovante em alguns minutos.", msg_id)
-            return True
-
-        if not analise.get("comprova"):
-            motivo = analise.get("motivo", "não comprova a candidatura")
-            conn.execute("UPDATE validacoes SET status='recusada', detalhe=? WHERE link=?",
-                         (motivo, link))
-            conn.commit()
-            _atualizar_planilha(link, "recusada", motivo[:120])
-            _enviar(f"❌ Comprovante recusado: {motivo}\nEnvie outro (tela de confirmação ou "
-                    "e-mail da empresa).", msg_id)
-            return True
-
-        # ── Validada ──
-        metodo = "print" if mime.startswith("image/") else "email"
-        arquivo = _salvar_arquivo(link, conteudo, mime)
-        conn.execute("""UPDATE validacoes SET status=?, metodo=?, hash=?, validada_em=?, detalhe=?
-                        WHERE link=?""",
-                     (metodo, metodo, digest, _agora(), arquivo, link))
-        conn.commit()
-        comprovante = (f"{metodo} · {datetime.utcnow():%d/%m/%Y} · "
-                       f"{analise.get('tipo', '')} · sha:{digest[:10]}")
-        _atualizar_planilha(link, metodo, comprovante)
-        _enviar(f"✅ Candidatura validada ({metodo})!\n{titulo} — {empresa}", msg_id)
+    aba = _aba_ou_none()
+    if aba is None:
+        _enviar("⚠️ Não consegui acessar a planilha agora. Reenvie o comprovante mais tarde.", msg_id)
         return True
-    finally:
-        conn.close()
 
+    linhas = _ler_linhas(aba)
+    alvo = _vaga_alvo(linhas, msg)
+    if not alvo:
+        _enviar("Não sei a qual vaga esse comprovante pertence. Responda diretamente à "
+                "mensagem '📎 Comprovante pendente' da vaga.", msg_id)
+        return True
+    linha, titulo, empresa = alvo["linha"], alvo["titulo"], alvo["empresa"]
 
-def coletar_updates() -> None:
-    """Modo --polling: lê as mensagens novas do Telegram.
-    Use SÓ se nenhum outro código seu consome getUpdates (o offset é confirmado aqui).
-    Com o telegram_acoes.py ligado, NÃO use."""
-    conn = _db()
-    linha = conn.execute("SELECT v FROM kv WHERE k = 'offset'").fetchone()
-    offset = int(linha[0]) if linha else 0
-    resp = _tg("getUpdates", offset=offset, timeout=0)
-    for u in resp.get("result", []):
-        processar_update(u)
-        offset = u["update_id"] + 1
-    conn.execute("INSERT OR REPLACE INTO kv (k, v) VALUES ('offset', ?)", (str(offset),))
-    conn.commit()
-    conn.close()
+    # ── Obtém o conteúdo ──
+    if foto or doc:
+        if foto:
+            file_id, mime = foto[-1]["file_id"], "image/jpeg"
+        else:
+            mime = doc.get("mime_type", "")
+            if not (mime.startswith("image/") or mime == "application/pdf"):
+                _enviar("Formato não aceito. Envie imagem, PDF ou cole o texto do e-mail.", msg_id)
+                return True
+            file_id = doc["file_id"]
+        conteudo = _baixar(file_id)
+        if not conteudo:
+            _enviar("Não consegui baixar o arquivo. Tente enviar de novo.", msg_id)
+            return True
+    else:
+        conteudo, mime = texto, "text/plain"
+
+    # ── Anti-reaproveitamento (o hash fica na coluna Q das vagas já validadas) ──
+    bruto = conteudo if isinstance(conteudo, bytes) else conteudo.encode()
+    digest = hashlib.sha256(bruto).hexdigest()
+    marca = f"sha:{digest[:16]}"
+    outro = next((x for x in linhas if marca in x["comprovante"] and x["linha"] != linha), None)
+    if outro:
+        _enviar(f"❌ Esse comprovante já foi usado na vaga '{outro['titulo']}'. "
+                "Cada candidatura precisa do seu próprio comprovante.", msg_id)
+        return True
+
+    # ── IA confere ──
+    analise = _analisar_comprovante(conteudo, mime, titulo, empresa)
+    if analise.get("comprova") is None:
+        _enviar("⚠️ Não consegui analisar agora. Reenvie o comprovante em alguns minutos.", msg_id)
+        return True
+
+    if not analise.get("comprova"):
+        motivo = analise.get("motivo", "não comprova a candidatura")
+        _gravar(aba, linha, "recusada", motivo[:120])
+        _enviar(f"❌ Comprovante recusado: {motivo}\nEnvie outro (tela de confirmação ou "
+                "e-mail da empresa).", msg_id)
+        return True
+
+    # ── Validada ──
+    metodo = "print" if mime.startswith("image/") else "email"
+    comprovante = f"{metodo} · {_hoje_br()} · {analise.get('tipo', '')} · {marca}"
+    _gravar(aba, linha, metodo, comprovante, data=True)
+    _enviar(f"✅ Candidatura validada ({metodo})!\n{titulo} — {empresa}", msg_id)
+    return True
 
 
 # ====================================================================
@@ -457,23 +435,19 @@ def verificar_emails_pendentes() -> None:
     if not token:
         print("  ℹ️  Gmail não configurado — validação automática por e-mail ignorada.")
         return
+    aba = _aba_ou_none()
+    if aba is None:
+        return
 
-    conn = _db()
-    marcas = ",".join("?" * len(PENDENTES))
-    pend = conn.execute(f"SELECT link, titulo, empresa FROM validacoes WHERE status IN ({marcas})",
-                        PENDENTES).fetchall()
-    for link, titulo, empresa in pend:
-        achou = _buscar_email(token, empresa, titulo)
+    for x in _ler_linhas(aba):
+        if x["status"] not in PENDENTES:
+            continue
+        achou = _buscar_email(token, x["empresa"], x["titulo"])
         if not achou:
             continue
-        comprovante = f"e-mail · {datetime.utcnow():%d/%m/%Y} · Gmail:{achou['id']}"
-        conn.execute("""UPDATE validacoes SET status='email', metodo='gmail', validada_em=?, detalhe=?
-                        WHERE link=?""", (_agora(), f"{achou['assunto']} | {achou['de']}", link))
-        conn.commit()
-        _atualizar_planilha(link, "email", comprovante)
-        _enviar(f"✅ Validada automaticamente pelo e-mail da empresa:\n{titulo} — {empresa}")
-        print(f"  ✅ Gmail validou: {titulo[:40]}")
-    conn.close()
+        _gravar(aba, x["linha"], "email", f"e-mail · {_hoje_br()} · Gmail:{achou['id']}", data=True)
+        _enviar(f"✅ Validada automaticamente pelo e-mail da empresa:\n{x['titulo']} — {x['empresa']}")
+        print(f"  ✅ Gmail validou: {x['titulo'][:40]}")
 
 
 # ====================================================================
@@ -482,18 +456,24 @@ def verificar_emails_pendentes() -> None:
 
 def expirar_pendentes() -> None:
     limite = datetime.utcnow() - timedelta(hours=HORAS_PRAZO)
-    conn = _db()
-    marcas = ",".join("?" * len(PENDENTES))
-    pend = conn.execute(f"""SELECT link, titulo, empresa, criada_em FROM validacoes
-                            WHERE status IN ({marcas})""", PENDENTES).fetchall()
-    for link, titulo, empresa, criada in pend:
-        if criada and datetime.fromisoformat(criada) < limite:
-            conn.execute("UPDATE validacoes SET status='expirada' WHERE link=?", (link,))
-            conn.commit()
-            _atualizar_planilha(link, "expirada")
-            _enviar(f"⚠️ Prazo do comprovante encerrado:\n{titulo} — {empresa}")
-            print(f"  ⚠️  Expirou: {titulo[:40]}")
-    conn.close()
+    aba = _aba_ou_none()
+    if aba is None:
+        return
+
+    for x in _ler_linhas(aba):
+        if x["status"] not in PENDENTES:
+            continue
+        partes = x["controle"].split("|")
+        if len(partes) < 2:
+            continue
+        try:
+            criada = datetime.fromisoformat(partes[1])
+        except ValueError:
+            continue
+        if criada < limite:
+            _gravar(aba, x["linha"], "expirada")
+            _enviar(f"⚠️ Prazo do comprovante encerrado:\n{x['titulo']} — {x['empresa']}")
+            print(f"  ⚠️  Expirou: {x['titulo'][:40]}")
 
 
 # ====================================================================
@@ -501,14 +481,7 @@ def expirar_pendentes() -> None:
 # ====================================================================
 
 def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--polling", action="store_true",
-                        help="lê mensagens do Telegram (use só se nenhum outro código lê getUpdates)")
-    args = parser.parse_args()
-
     print("\n[VALIDAÇÃO] Conferindo comprovantes pendentes...")
-    if args.polling:
-        coletar_updates()
     verificar_emails_pendentes()
     expirar_pendentes()
 
