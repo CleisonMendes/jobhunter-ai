@@ -3,13 +3,14 @@ name: Radar de Vagas Automacao
 on:
   schedule:
     # Executa automaticamente no minuto 0 a cada 2 horas
-    - cron: '0 */2 * * *'
-  workflow_dispatch: # Botão para executar manualmente quando quiser
+    #- cron: '0 */2  * * *'  
+    # Executa automaticamente no minuto 0 a cada 5 horas
+    #- cron: '0 */5  * * *'  
 
-# Evita duas execuções ao mesmo tempo (cron + manual) brigando pelo commit do banco
-concurrency:
-  group: radar-de-vagas
-  cancel-in-progress: false
+    # Roda às 10h, 15h e 20h (horário de Brasília)
+    # O GitHub usa UTC (3h à frente): 13h, 18h e 23h UTC
+    - cron: '0 13,18,23 * * *'
+  workflow_dispatch: # Botão para executar manualmente quando quiser
 
 jobs:
   procurar-vagas:
@@ -33,7 +34,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install requests beautifulsoup4 lxml pypdf google-generativeai
           pip install google-genai
-          pip install gspread google-auth python-docx
+          pip install gspread google-auth
 
       - name: Executar o Radar de Vagas
         env:
@@ -42,10 +43,6 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
           SHEET_ID: ${{ secrets.SHEET_ID }}
-          # Opcional: empresas do Lever separadas por vírgula (ex.: empresa-a,empresa-b). Vazio = desligado.
-          LEVER_EMPRESAS: ${{ secrets.LEVER_EMPRESAS }}
-          # Follow-up só para candidaturas (botão) feitas a partir desta data
-          FOLLOWUP_DESDE: '25/10/2026'
         run: python main.py
 
       - name: Salvar e persistir Banco de Dados e Perfil
@@ -55,6 +52,21 @@ jobs:
           git add vagas_enviadas.db || true
           git add fase3_perfil/perfil.json || true
           git commit -m "🤖 Auto-update: DB de vagas e/ou Perfil JSON [skip ci]" || true
-          # se você (ou outra execução) enviou algo ao repositório durante a rodada, integra antes de enviar
-          git pull --rebase --autostash origin main || true
           git push || true
+
+      # Validação de candidaturas: procura o e-mail de confirmação no Gmail (se configurado)
+      # e encerra os pedidos de comprovante que passaram do prazo.
+      # Fica DEPOIS de salvar o banco e com continue-on-error, para nunca atrapalhar o robô.
+      # Se o seu main.py já chama rotinas_telegram(), este passo é redundante (e inofensivo).
+      - name: Conferir comprovantes (Gmail e prazo)
+        continue-on-error: true
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          GMAIL_CLIENT_ID: ${{ secrets.GMAIL_CLIENT_ID }}
+          GMAIL_CLIENT_SECRET: ${{ secrets.GMAIL_CLIENT_SECRET }}
+          GMAIL_REFRESH_TOKEN: ${{ secrets.GMAIL_REFRESH_TOKEN }}
+        run: python validacao.py
