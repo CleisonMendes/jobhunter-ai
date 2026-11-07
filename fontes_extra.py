@@ -26,7 +26,7 @@ import unicodedata
 import requests
 from urllib.parse import quote
 from datetime import datetime, timezone
-from fonte_eureca   import buscar_todas_eureca, EURECA_ATIVA
+
 
 LEVER_HOST = os.environ.get("LEVER_HOST", "api.lever.co")
 LEVER_EMPRESAS = [s.strip() for s in os.environ.get("LEVER_EMPRESAS", "").split(",") if s.strip()]
