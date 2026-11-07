@@ -1,4 +1,3 @@
-
 """
 RADAR DE VAGAS — analise_envio.py (NOVO)
 Substitui no main.py tudo de "FASE 4: MATCH SCORE" até o fim de _enviar_alerta_urgencia.
@@ -12,6 +11,8 @@ O que mudou em relação ao main.py antigo:
   4. Cada vaga vai em uma mensagem própria, com botões "Me candidatei" / "Descartar"
      (os botões só aparecem se a vaga entra na planilha: score >= SCORE_MIN_PLANILHA).
      Vagas com score >= 85 ganham o selo "VAGA OURO" na própria mensagem.
+  5. Estágio em tecnologia: o pré-filtro aceita títulos de estágio tech (desenvolvimento,
+     tecnologia, TI, dados...) e o pedido de nota explica à IA que o candidato cursa ADS.
 
 Variáveis opcionais: MAX_ANALISES_POR_RODADA (padrão 5), SCORE_MIN_PLANILHA (padrão 60).
 """
@@ -35,6 +36,34 @@ MODELOS_FALLBACK = ['gemini-2.5-flash', 'gemini-3.5-flash']
 
 # compatibilidade com o nome antigo
 _enviar_mensagem_telegram = enviar_telegram
+
+# ── Pré-filtro de título (antes de gastar cota do Gemini) ────────────
+TERMOS_CHAVE = [
+    "antifraude", "chargeback", "fraude", "risco", "dados", "data", "python", "sql", "backoffice",
+    "desenvolvedor", "desenvolvedora", "developer", "full stack", "fullstack", "full-stack",
+    "javascript", "react", "node", "qa", "teste", "automação", "automacao", "rpa", "sistemas",
+    "suporte técnico", "suporte tecnico", "integração", "integracao",
+    "programador", "programadora", "software", "backend", "back-end", "back end",
+    "frontend", "front-end", "front end", "typescript", "java", "php",
+    # estágio / porta de entrada em tecnologia
+    "desenvolvimento", "tecnologia", "programação", "programacao", "analytics",
+    "business intelligence", "estágio em ti", "estagio em ti",
+]
+TERMOS_BARRAR = [
+    "sênior", "senior", "lead", "staff", "coordenador", "gerente", "manager",
+    # "desenvolvimento" que não é de software
+    "desenvolvimento de pessoas", "desenvolvimento humano", "desenvolvimento organizacional",
+    "desenvolvimento de negócios", "desenvolvimento de negocios",
+]
+
+
+def _passa_prefiltro(titulo: str) -> bool:
+    t = (titulo or "").lower()
+    if any(b in t for b in TERMOS_BARRAR):
+        return False
+    if any(c in t for c in TERMOS_CHAVE):
+        return True
+    return bool(re.search(r"\bti\b", t))   # "TI" como palavra inteira (ex.: "Estágio em TI")
 
 
 class Timer:
@@ -118,19 +147,7 @@ def _sem_analise(vagas: list[dict]) -> list[dict]:
 def calcular_match(vagas_filtradas: list[dict], perfil: dict) -> list[dict]:
     print("\n[FASE 4] Triagem Híbrida e Inteligência Analítica (Match 3.0)...")
 
-    termos_chave  = ["antifraude","chargeback","fraude","risco","dados","data","python","sql","backoffice",
-                     "desenvolvedor","desenvolvedora","developer","full stack","fullstack","full-stack",
-                     "javascript","react","node","qa","teste","automação","automacao","rpa","sistemas",
-                     "suporte técnico","suporte tecnico","integração","integracao",
-                     "programador","programadora","software","backend","back-end","back end",
-                     "frontend","front-end","front end","typescript","java","php"]
-    termos_barrar = ["sênior","senior","lead","staff","coordenador","gerente","manager"]
-
-    pre = [
-        v for v in vagas_filtradas
-        if any(t in v.get('titulo','').lower() for t in termos_chave)
-        and not any(t in v.get('titulo','').lower() for t in termos_barrar)
-    ]
+    pre = [v for v in vagas_filtradas if _passa_prefiltro(v.get('titulo', ''))]
     pre.sort(key=_prioridade)
 
     vistos = _links_ja_vistos()
@@ -166,14 +183,18 @@ def calcular_match(vagas_filtradas: list[dict], perfil: dict) -> list[dict]:
     from google import genai
     client = genai.Client(api_key=api_key)
 
+    pref = perfil.get("preferencias_vaga", {}) or {}
     perfil_resumido = {
         "cargo":       perfil.get("cargo_atual"),
         "habilidades": perfil.get("habilidades"),
-        "areas":       perfil.get("preferencias_vaga", {}).get("areas"),
+        "areas":       pref.get("areas"),
+        "niveis_aceitos": pref.get("nivel"),
+        "formacao":    perfil.get("formacao"),
         "objetivo":    ("Transição de carreira para tecnologia (desenvolvimento web, automação, dados, QA). "
                         "Mais de 10 anos em meios de pagamento, chargeback e antifraude; formação full-stack "
                         "em JavaScript (Node.js, React, SQL, APIs REST) e ADS em andamento. "
-                        "Busca vagas júnior ou pleno; vagas de tecnologia e de operações de pagamentos são aderentes."),
+                        "Busca vagas de estágio em tecnologia, júnior ou pleno; vagas de tecnologia e de "
+                        "operações de pagamentos são aderentes."),
     }
 
     def analisar_vaga(vaga):
@@ -203,6 +224,7 @@ TAREFA
 5. "perguntas_entrevista": 5 perguntas específicas desta vaga (não genéricas), ligadas às experiências do candidato.
 6. "mensagem_linkedin": mensagem pronta de abordagem ao recrutador (até 450 caracteres), citando a vaga e a empresa; use [Nome do Recrutador].
 Use somente requisitos escritos na descrição. Nunca invente.
+Se a vaga for de ESTÁGIO: o candidato cursa Análise e Desenvolvimento de Sistemas (conclusão em 2028), que conta como curso da área de tecnologia. Se a vaga pedir curso de TI, computação ou "áreas afins", considere o requisito atendido. Avalie a aderência pela área da vaga e pelas habilidades técnicas; não penalize a falta de experiência profissional em tecnologia, e trate os anos de experiência em pagamentos como diferencial. Se o curso exigido for de outra área (ex.: Farmácia, Engenharia Química), a aderência é baixa.
 Se a "vaga" for o texto de uma postagem do LinkedIn, extraia também o nome do cargo
 (sem hashtags, emojis ou a palavra [POST]) e o nome da empresa, somente se aparecer no texto.
 Se a empresa não aparecer, deixe vazio.
