@@ -38,6 +38,7 @@ from telegram_acoes import rotinas_telegram
 from funil          import enviar_relatorio_funil
 from saude_fontes   import verificar_e_alertar
 from fontes_extra   import buscar_todas_lever, LEVER_EMPRESAS
+from fonte_eureca   import buscar_todas_eureca, EURECA_ATIVA
 from linkedin_vagas import buscar_vagas_linkedin
 from filtro_local   import filtrar_por_local
 
@@ -152,7 +153,7 @@ def salvar_descartadas(todas_vagas: list[dict], vagas_filtradas: list[dict]) -> 
 
 
 # ====================================================================
-# ── FASE 1: BUSCA PARALELA (+ saúde das fontes + Lever) ──────────────
+# ── FASE 1: BUSCA PARALELA (+ saúde das fontes + Lever + Eureca) ─────
 # ====================================================================
 
 TERMOS_GUPY     = ["analista antifraude", "analista chargeback", "prevenção de fraudes",
@@ -225,6 +226,17 @@ def buscar_todas_vagas_paralelo() -> list:
             except Exception as e:
                 print(f"  ⚠️  Erro no Lever: {e}")
                 saude["Lever"][1] = f"{type(e).__name__}: {str(e)[:140]}"
+
+    if EURECA_ATIVA:
+        with Timer("Eureca"):
+            saude["Eureca"] = [0, ""]
+            try:
+                achadas = buscar_todas_eureca()
+                todas_vagas.extend(achadas)
+                saude["Eureca"][0] = len(achadas)
+            except Exception as e:
+                print(f"  ⚠️  Erro na Eureca: {e}")
+                saude["Eureca"][1] = f"{type(e).__name__}: {str(e)[:140]}"
 
     # alerta no Telegram se alguma fonte está quebrada há várias rodadas
     try:
@@ -344,7 +356,7 @@ def main():
 
     print("\n" + "=" * 60)
     print("  🤖 RADAR DE VAGAS — Sistema Completo")
-    print("  Gupy · Greenhouse · LinkedIn (posts + vagas) · Lever · Google Sheets")
+    print("  Gupy · Greenhouse · LinkedIn (posts + vagas) · Lever · Eureca · Google Sheets")
     print("=" * 60)
 
     # Fase 3: Perfil
