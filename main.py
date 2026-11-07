@@ -41,7 +41,7 @@ from fontes_extra   import buscar_todas_lever, LEVER_EMPRESAS
 from fonte_eureca   import buscar_todas_eureca, EURECA_ATIVA
 from linkedin_vagas import buscar_vagas_linkedin
 from filtro_local   import filtrar_por_local
-
+from fonte_eureca   import buscar_todas_eureca, EURECA_ATIVA
 
 # ====================================================================
 # ── UTILITÁRIO: TIMER ────────────────────────────────────────────────
