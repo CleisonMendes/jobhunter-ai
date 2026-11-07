@@ -2,15 +2,23 @@
 RADAR DE VAGAS — telegram_acoes.py
 
   • enviar_telegram()      → envio (com botões opcionais)
-  • botoes_vaga()          → "✅ Me candidatei" / "🗑️ Descartar"
+  • botoes_vaga()          → 6 botões: candidatei, descartar, salvar, lembrar, entrevista, currículo
   • processar_cliques()    → lê os cliques e os comprovantes pendentes (prints/e-mails)
   • validar_comprovantes() → valida por e-mail (Gmail) e encerra pendências fora do prazo
   • lembretes_followup()   → avisa quando passaram FOLLOWUP_DIAS da candidatura
+  • lembretes_agendados()  → reenvia as vagas marcadas com "⏰ Lembrar amanhã" / "⭐ Salvar para depois"
   • rotinas_telegram()     → roda as rotinas acima (chamada a cada rodada)
 
 Como funciona sem servidor: o robô roda por agendamento (GitHub Actions), então os
 cliques e as mensagens ficam na fila do Telegram e são processados na próxima rodada.
 O Telegram descarta os itens já confirmados (offset), então não precisa guardar nada no banco.
+
+BOTÕES NOVOS (gravam na planilha, usando as colunas que já existem):
+  🎤 Entrevista          → coluna Fase (J) = FASE_ENTREVISTA
+  ⭐ Salvar para depois  → K = "Sim", L = "⭐ Salva para depois", M = hoje + SALVAS_DIAS
+  ⏰ Lembrar amanhã      → K = "Sim", L = "⏰ Lembrar amanhã",     M = amanhã
+  Quando a data da coluna M chega, a vaga é reenviada ao Telegram (com os botões) na
+  primeira rodada do dia, e a coluna L passa a indicar que o lembrete foi enviado.
 
 VALIDAÇÃO DE CANDIDATURA:
   "✅ Me candidatei" NÃO grava mais a data na planilha. Ele pede o comprovante
@@ -20,8 +28,10 @@ VALIDAÇÃO DE CANDIDATURA:
 Variáveis opcionais:
   STATUS_CANDIDATEI  → texto da coluna Status ao candidatar   (padrão "Em andamento")
   STATUS_DESCARTADA  → texto da coluna Status ao descartar    (padrão "Descartada")
+  FASE_ENTREVISTA    → texto da coluna Fase ao marcar entrevista (padrão "Entrevista")
+  SALVAS_DIAS        → dias até lembrar de uma vaga salva      (padrão 3)
   FOLLOWUP_DIAS      → dias até o lembrete                    (padrão 2)
-  Se a coluna Status tiver lista suspensa, use valores que existam nela.
+  Se a coluna Status ou Fase tiver lista suspensa, use valores que existam nela.
 """
 
 import os
@@ -29,14 +39,21 @@ import json
 import html
 import hashlib
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from integracoes import _abrir_aba, PRIMEIRA_LINHA_DADOS
 from validacao import iniciar_validacao, processar_update as processar_comprovante
 
 STATUS_CANDIDATEI = os.environ.get("STATUS_CANDIDATEI", "Em andamento")
 STATUS_DESCARTADA = os.environ.get("STATUS_DESCARTADA", "Descartada")
+FASE_ENTREVISTA = os.environ.get("FASE_ENTREVISTA", "Entrevista")
+try:
+    SALVAS_DIAS = int(os.environ.get("SALVAS_DIAS", "3"))
+except ValueError:
+    SALVAS_DIAS = 3
 PENDENTE_CURRICULO = "📄 Gerar currículo"  # marcador na coluna L (Qual ação) quando você pede o currículo
+MARC_LEMBRAR = "⏰ Lembrar amanhã"           # marcador na coluna L (botão ⏰)
+MARC_SALVA = "⭐ Salva para depois"          # marcador na coluna L (botão ⭐)
 FOLLOWUP_DIAS = int(os.environ.get("FOLLOWUP_DIAS", "2"))
 # Só lembra de candidaturas com data a partir de (dd/mm/aaaa). Ignora as datas que o robô antigo
 # preenchia sozinho ao registrar a vaga. Vazio = sem corte.
@@ -49,6 +66,11 @@ C_DATA, C_FASE, C_ACAO_NEC, C_ACAO, C_PRAZO, C_STATUS, C_FEEDBACK = 9, 10, 11, 1
 
 def _esc(txt) -> str:
     return html.escape(str(txt or ""), quote=False)
+
+
+def _hoje_brt():
+    """Data de hoje no horário de Brasília (o robô roda em UTC)."""
+    return (datetime.utcnow() - timedelta(hours=3)).date()
 
 
 # ====================================================================
@@ -80,22 +102,31 @@ def hash_link(link: str) -> str:
     return hashlib.sha1((link or "").strip().encode("utf-8")).hexdigest()[:12]
 
 
-def botoes_vaga(link: str, curriculo: bool = True) -> list:
-    h = hash_link(link)
-    teclado = [[
-        {"text": "✅ Me candidatei", "callback_data": f"c|{h}"},
-        {"text": "🗑️ Descartar",      "callback_data": f"d|{h}"},
-    ]]
+def _teclado(h: str, curriculo: bool = True) -> list:
+    """Layout dos botões (3 linhas de 2):
+         ✅ Me candidatei       | 🗑️ Descartar
+         ⭐ Salvar para depois  | ⏰ Lembrar amanhã
+         🎤 Entrevista          | 📄 Currículo + kit
+    """
+    teclado = [
+        [{"text": "✅ Me candidatei",      "callback_data": f"c|{h}"},
+         {"text": "🗑️ Descartar",          "callback_data": f"d|{h}"}],
+        [{"text": "⭐ Salvar para depois", "callback_data": f"s|{h}"},
+         {"text": "⏰ Lembrar amanhã",     "callback_data": f"l|{h}"}],
+    ]
+    ultima = [{"text": "🎤 Entrevista", "callback_data": f"e|{h}"}]
     if curriculo:
-        teclado.append([{"text": "📄 Gerar currículo + kit", "callback_data": f"g|{h}"}])
+        ultima.append({"text": "📄 Currículo + kit", "callback_data": f"g|{h}"})
+    teclado.append(ultima)
     return teclado
 
 
+def botoes_vaga(link: str, curriculo: bool = True) -> list:
+    return _teclado(hash_link(link), curriculo)
+
+
 def botoes_vaga_sem_curriculo(h: str) -> list:
-    return [[
-        {"text": "✅ Me candidatei", "callback_data": f"c|{h}"},
-        {"text": "🗑️ Descartar",      "callback_data": f"d|{h}"},
-    ]]
+    return _teclado(h, curriculo=False)
 
 
 def enviar_documento(caminho: str, legenda: str, token: str, chat_id: str) -> bool:
@@ -200,7 +231,7 @@ def processar_cliques(token: str, chat_id: str) -> None:
         if str((msg.get("chat") or {}).get("id")) != str(chat_id):
             continue  # ignora cliques de outros chats
         partes = (cq.get("data") or "").split("|")
-        if len(partes) != 2 or partes[0] not in ("c", "d", "g"):
+        if len(partes) != 2 or partes[0] not in ("c", "d", "g", "e", "s", "l"):
             continue
         acao, h = partes
         linha = linhas.get(h)
@@ -228,6 +259,28 @@ def processar_cliques(token: str, chat_id: str) -> None:
                 teclado = botoes_vaga_sem_curriculo(h)
                 teclado.append([{"text": "⏳ Currículo na fila", "callback_data": "x"}])
                 _trocar_botoes(base, chat_id, msg.get("message_id"), "", teclado=teclado)
+            elif acao == "e":
+                # Entrevista: muda só a coluna Fase. (O follow-up ignora vagas fora da fase Inscrição.)
+                aba.batch_update(
+                    [{"range": f"J{linha}", "values": [[FASE_ENTREVISTA]]}],
+                    value_input_option="USER_ENTERED")
+                _responder(base, cq["id"], "Entrevista marcada 🎤 Boa sorte!")
+                _trocar_botoes(base, chat_id, msg.get("message_id"), "🎤 Entrevista marcada")
+            elif acao in ("s", "l"):
+                dias = 1 if acao == "l" else SALVAS_DIAS
+                marcador = MARC_LEMBRAR if acao == "l" else MARC_SALVA
+                quando = (_hoje_brt() + timedelta(days=dias)).strftime("%d/%m/%Y")
+                aba.batch_update([
+                    {"range": f"K{linha}", "values": [["Sim"]]},
+                    {"range": f"L{linha}", "values": [[marcador]]},
+                    {"range": f"M{linha}", "values": [[quando]]},
+                ], value_input_option="USER_ENTERED")
+                if acao == "l":
+                    _responder(base, cq["id"], "Combinado: te lembro amanhã ⏰")
+                    _trocar_botoes(base, chat_id, msg.get("message_id"), f"⏰ Lembro em {quando[:5]}")
+                else:
+                    _responder(base, cq["id"], f"Vaga salva ⭐ Te lembro em {dias} dias")
+                    _trocar_botoes(base, chat_id, msg.get("message_id"), f"⭐ Salva, lembro em {quando[:5]}")
             else:
                 aba.batch_update(
                     [{"range": f"N{linha}", "values": [[STATUS_DESCARTADA]]}],
@@ -341,6 +394,60 @@ def lembretes_followup(token: str, chat_id: str, max_por_rodada: int = 10) -> No
 
 
 # ====================================================================
+# ── LEMBRETES AGENDADOS: ⏰ LEMBRAR AMANHÃ / ⭐ SALVAR PARA DEPOIS ────
+# ====================================================================
+
+def lembretes_agendados(token: str, chat_id: str, max_por_rodada: int = 10) -> None:
+    """Reenvia (com os botões) as vagas marcadas com ⏰ ou ⭐ cuja data da coluna M já chegou.
+    Depois do envio, a coluna L indica que o lembrete foi enviado e a coluna K é limpa."""
+    print("\n[LEMBRETES] Procurando vagas salvas ou adiadas...")
+    aba = _planilha()
+    if aba is None:
+        return
+    hoje = _hoje_brt()
+    devidos = []
+
+    for n, lin in enumerate(aba.get_all_values(), start=1):
+        if n < PRIMEIRA_LINHA_DADOS:
+            continue
+        lin = lin + [""] * (C_FEEDBACK - len(lin))
+        marcador = lin[C_ACAO - 1].strip()
+        if marcador not in (MARC_LEMBRAR, MARC_SALVA):
+            continue
+        prazo = _parse_data_br(lin[C_PRAZO - 1])
+        if not prazo or prazo > hoje:
+            continue
+        titulo, link, empresa = lin[C_TITULO - 1], lin[C_LINK - 1].strip(), lin[C_EMPRESA - 1]
+        if not (titulo and link):
+            continue
+        devidos.append((n, marcador, titulo, empresa, link))
+        if len(devidos) >= max_por_rodada:
+            break
+
+    if not devidos:
+        print("  🤫 Nenhum lembrete agendado para hoje.")
+        return
+
+    dados = []
+    for n, marcador, titulo, empresa, link in devidos:
+        rotulo = "⏰ <b>LEMBRETE</b>" if marcador == MARC_LEMBRAR else "⭐ <b>VAGA SALVA</b>"
+        texto = (f"{rotulo}\n\n<b>{_esc(titulo)}</b> — {_esc(empresa)}\n"
+                 f"🔗 <a href='{html.escape(link, quote=True)}'>abrir vaga</a>")
+        if enviar_telegram(texto, token, chat_id, botoes=botoes_vaga(link)):
+            enviado = "⏰ Lembrete enviado" if marcador == MARC_LEMBRAR else "⭐ Salva (lembrete enviado)"
+            dados += [
+                {"range": f"K{n}", "values": [[""]]},
+                {"range": f"L{n}", "values": [[enviado]]},
+            ]
+    if dados:
+        try:
+            aba.batch_update(dados, value_input_option="USER_ENTERED")
+            print(f"  ✅ {len(dados) // 2} lembrete(s) enviado(s) e marcado(s) na planilha.")
+        except Exception as e:
+            print(f"  ⚠️  Lembrete enviado, mas não consegui marcar a planilha: {e}")
+
+
+# ====================================================================
 # ── ATALHO ───────────────────────────────────────────────────────────
 # ====================================================================
 
@@ -348,7 +455,7 @@ def rotinas_telegram(token: str, chat_id: str) -> None:
     if not planilha_configurada():
         print("\n[BOTÕES/FOLLOW-UP] Planilha não configurada. Pulando.")
         return
-    rotinas = [processar_cliques, validar_comprovantes, lembretes_followup]
+    rotinas = [processar_cliques, validar_comprovantes, lembretes_followup, lembretes_agendados]
     try:
         from curriculo import gerar_curriculos_pendentes  # importado aqui para evitar import circular
         rotinas.insert(1, gerar_curriculos_pendentes)       # depois dos cliques, antes da validação
