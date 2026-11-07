@@ -3,6 +3,7 @@
   RADAR DE VAGAS — Fase 2: Filtro Inteligente
   Bloco 3+: Filtro de recência + bônus de data
   Bloco 5: Perfil em transição para tecnologia
+  Bloco 6: Estágio em tecnologia (ADS + fullstack)
 ==============================================
 
 Regras de recência:
@@ -10,11 +11,15 @@ Regras de recência:
   - 16–30 dias → baixa prioridade (sem bônus)
   - 8–15 dias  → intermediária (+2 pts bônus)
   - 0–7 dias   → alta prioridade (+5 pts bônus)
-  - sem data   → aceita sem bônus (Greenhouse, Indeed, Posts)
+  - sem data   → aceita sem bônus (Greenhouse, Indeed, Posts, Eureca)
 
 Casamento de palavras:
   Os termos são procurados como PALAVRA INTEIRA e sem acento
   (assim "ios" não bloqueia "negócios" e "ui" não bloqueia "equipe").
+
+Estágio:
+  A palavra "estágio" sozinha NÃO pontua (senão entrariam estágios de qualquer área).
+  Só passam estágios cujo título tenha termo de tecnologia, dados ou desenvolvimento.
 """
 
 import re
@@ -80,6 +85,16 @@ PALAVRAS_CHAVE = {
         "php",
         "back end",
         "front end",
+        # Estágio em tecnologia (a palavra "estágio" sozinha não pontua)
+        "estágio em desenvolvimento",
+        "estágio em tecnologia",
+        "estágio em ti",
+        "estágio em software",
+        "estágio em programação",
+        "estágio em sistemas",
+        "estágio em engenharia de software",
+        "estágio em dados",
+        "estágio em análise de dados",
     ],
     "media": [
         "analista de dados",
@@ -115,6 +130,15 @@ PALAVRAS_CHAVE = {
         "backend",
         "adquirência",
         "meios de pagamento",
+        # Termos comuns em títulos de estágio tech
+        "desenvolvimento de software",
+        "desenvolvimento de sistemas",
+        "desenvolvimento web",
+        "software",
+        "programação",
+        "sistemas",
+        "analytics",
+        "business intelligence",
     ],
     "baixa": [
         "dados",
@@ -152,6 +176,9 @@ TITULOS_BLOQUEADOS = [
     "scrum master", "agile coach",
     "assessoria de investimentos",
     "sales development",
+    # "desenvolvimento" que não é de software (evita falso positivo em estágio)
+    "desenvolvimento de pessoas", "desenvolvimento humano",
+    "desenvolvimento organizacional", "desenvolvimento de negócios",
 ]
 
 LOCAIS_BRASIL = [
