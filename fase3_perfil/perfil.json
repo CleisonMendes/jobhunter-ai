@@ -4,7 +4,7 @@
   "empresa_atual": "HS Prevent",
   "experiencia_anos": 10,
 
-  "objetivo": "Transição para tecnologia: posições de Tecnologia, Automação, Dados, Desenvolvimento ou Operações, unindo a experiência em meios de pagamento, fraude e chargeback ao conhecimento em programação.",
+  "objetivo": "Transição para tecnologia: posições de Tecnologia, Automação, Dados, Desenvolvimento ou Operações, unindo a experiência em meios de pagamento, fraude e chargeback ao conhecimento em programação. Também aceita vagas de estágio em tecnologia (desenvolvimento, full stack, dados, automação), alinhadas à graduação em Análise e Desenvolvimento de Sistemas e à formação full stack.",
 
   "habilidades": [
     "chargeback",
@@ -82,7 +82,7 @@
       "melhoria de processos",
       "melhoria continua"
     ],
-    "nivel": ["júnior", "pleno"],
+    "nivel": ["estágio", "júnior", "pleno"],
     "salario_minimo": 3200
   },
 
